@@ -1,0 +1,32 @@
+`timescale 1ns / 1ps
+
+module top_bin_clock (
+    input clk_100MHz,
+    input reset,
+    output  [6:0] seg,
+    output  [7:0] an
+  );
+    
+    
+    wire w_1Hz;
+    wire w_inc_mins, w_inc_hrs;
+    wire inc_mins_or, inc_hrs_or;
+    wire [4:0] w_hr;
+    wire [5:0] w_min,w_sec;
+    wire [3:0] b_hr_t,b_hr_o,b_m_t,b_m_o,b_s_t,b_s_o;
+    
+    oneHz_generator uno(.clk_100MHz(clk_100MHz), .clk_1Hz(w_1Hz));
+    
+    seconds sec(.clk_1Hz(w_1Hz), .reset(reset), .inc_minutes(w_inc_mins), .seconds(w_sec));
+    minutes min(.inc_minutes(inc_mins_or), .reset(reset), .inc_hours(w_inc_hrs), .minutes(w_min));
+    hours hr(.inc_hours(inc_hrs_or), .reset(reset), .hours(w_hr));
+    time_to_bcd bcd(.hours(w_hr),.minutes(w_min),.seconds(w_sec),.hour_tens(b_hr_t),.hour_ones(b_hr_o),.minute_tens(b_m_t),.minute_ones(b_m_o),.second_tens(b_s_t),.second_ones(b_s_o));
+    seg_display display(.clk_100MHz(clk_100MHz),.reset(reset),.hour_tens(b_hr_t),.hour_ones(b_hr_o),.minute_tens(b_m_t),.minute_ones(b_m_o),.second_tens(b_s_t),.second_ones(b_s_o),.seg(seg),.an(an));
+   
+
+    
+   // assign inc_hrs_or = w_inc_hrs | inc_hrs_db;
+   //assign inc_mins_or = w_inc_mins | inc_mins_db;
+
+    
+endmodule
