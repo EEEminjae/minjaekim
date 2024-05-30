@@ -1,0 +1,155 @@
+`timescale 1ns / 1ps
+
+
+module seg_display(
+    input clk_100MHz,
+    input reset,
+    input [3:0] hour_tens,
+    input [3:0] hour_ones,
+    input [3:0] minute_tens,
+    input [3:0] minute_ones,
+    input [3:0] second_tens,
+    input [3:0] second_ones,
+    output reg [6:0]  seg,
+    output reg [7:0]  an
+    );
+  parameter NULL = 7'b1111111;      //NULL
+  parameter ZERO = 7'b1000000;      // 0
+  parameter ONE = 7'b1111001;       // 1
+  parameter TWO = 7'b0100100;       // 2
+  parameter THREE = 7'b0110000;     // 3
+  parameter FOUR = 7'b0011001;      // 4
+  parameter FIVE = 7'b0010010;      // 5
+  parameter SIX = 7'b0000010;       // 6;
+  parameter SEVEN = 7'b1111000;     // 7
+  parameter EIGHT = 7'b0000000;     // 8
+  parameter NINE = 7'b0010000;      // 9
+  //anode type
+  reg [2:0] anode_select;
+  reg [16:0] anode_timer;
+
+
+  always @ (posedge clk_100MHz or posedge reset) begin
+      if(reset) begin
+          anode_select <=0;
+          anode_timer <=0;
+      end
+      else
+         if(anode_timer == 99_999) begin
+              anode_timer <=0;
+              anode_select <= anode_select + 1;
+         end
+         else
+             anode_timer <= anode_timer + 1;
+  end
+  always @ (anode_select) begin
+      case(anode_select)
+          3'b000 : an = 8'b0111_1111;        //case0->Null
+          3'b001 : an = 8'b1011_1111;        //1    ->NUll
+          3'b010 : an = 8'b1101_1111;        //2    ->hour_tens
+          3'b011 : an = 8'b1110_1111;        //3    ->hour_ones
+          3'b100 : an = 8'b1111_0111;        //4    ->min_tens
+          3'b101 : an = 8'b1111_1011;        //5    ->min_ones
+          3'b110 : an = 8'b1111_1101;        //6    ->sec_tens
+          3'b111 : an = 8'b1111_1110;        //7    ->sec_ones
+      endcase
+  end
+  always @(*)
+     case(anode_select)
+         3'b000 : begin
+                   seg = NULL;
+                   end
+          3'b001: begin
+                   seg = NULL;
+                   end
+
+          3'b010: begin
+                        case(hour_tens)
+                          4'b0000 : seg = ZERO;
+                          4'b0001 : seg = ONE;
+                          4'b0010 : seg = TWO;
+                          4'b0011 : seg = THREE;
+                          4'b0100 : seg = FOUR;
+                          4'b0101 : seg = FIVE;
+                          4'b0110 : seg = SIX;
+                          4'b0111 : seg = SEVEN;
+                          4'b1000 : seg = EIGHT;
+                          4'b1001 : seg = NINE;
+                        endcase
+                  end
+
+            3'b011: begin
+                        case(hour_ones)
+                          4'b0000 : seg = ZERO;
+                          4'b0001 : seg = ONE;
+                          4'b0010 : seg = TWO;
+                          4'b0011 : seg = THREE;
+                          4'b0100 : seg = FOUR;
+                          4'b0101 : seg = FIVE;
+                          4'b0110 : seg = SIX;
+                          4'b0111 : seg = SEVEN;
+                          4'b1000 : seg = EIGHT;
+                          4'b1001 : seg = NINE;
+                        endcase
+                  end
+            3'b100: begin
+                        case(minute_tens)
+                          4'b0000 : seg = ZERO;
+                          4'b0001 : seg = ONE;
+                          4'b0010 : seg = TWO;
+                          4'b0011 : seg = THREE;
+                          4'b0100 : seg = FOUR;
+                          4'b0101 : seg = FIVE;
+                          4'b0110 : seg = SIX;
+                          4'b0111 : seg = SEVEN;
+                          4'b1000 : seg = EIGHT;
+                          4'b1001 : seg = NINE;
+                        endcase
+                  end
+            3'b101: begin
+                        case(minute_ones)
+                          4'b0000 : seg = ZERO;
+                          4'b0001 : seg = ONE;
+                          4'b0010 : seg = TWO;
+                          4'b0011 : seg = THREE;
+                          4'b0100 : seg = FOUR;
+                          4'b0101 : seg = FIVE;
+                          4'b0110 : seg = SIX;
+                          4'b0111 : seg = SEVEN;
+                          4'b1000 : seg = EIGHT;
+                          4'b1001 : seg = NINE;
+                        endcase
+                  end
+               3'b110: begin
+                        case(second_tens)
+                          4'b0000 : seg = ZERO;
+                          4'b0001 : seg = ONE;
+                          4'b0010 : seg = TWO;
+                          4'b0011 : seg = THREE;
+                          4'b0100 : seg = FOUR;
+                          4'b0101 : seg = FIVE;
+                          4'b0110 : seg = SIX;
+                          4'b0111 : seg = SEVEN;
+                          4'b1000 : seg = EIGHT;
+                          4'b1001 : seg = NINE;
+                        endcase
+                  end
+                  3'b111: begin
+                        case(second_ones)
+                          4'b0000 : seg = ZERO;
+                          4'b0001 : seg = ONE;
+                          4'b0010 : seg = TWO;
+                          4'b0011 : seg = THREE;
+                          4'b0100 : seg = FOUR;
+                          4'b0101 : seg = FIVE;
+                          4'b0110 : seg = SIX;
+                          4'b0111 : seg = SEVEN;
+                          4'b1000 : seg = EIGHT;
+                          4'b1001 : seg = NINE;
+                        endcase
+                  end   
+          endcase                        
+  
+ 
+    
+endmodule
