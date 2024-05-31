@@ -3,22 +3,28 @@
 module seconds (
    input clk_1Hz,
    input reset,
-   output inc_minutes,
+   output reg inc_minutes,
    output [5:0] seconds
    );
-   
+
    reg [5:0] sec_ctr = 0;
    
    always @ ( posedge clk_1Hz or posedge reset) begin
-      if(reset)
+      if(reset) begin
           sec_ctr <=0;
-      else
-         if (sec_ctr == 59)
-             sec_ctr <= 0;
-         else
-             sec_ctr <= sec_ctr + 1;
-   end
-   assign seconds = sec_ctr;
-   assign inc_minutes = ( sec_ctr ==59) ? 1:0;
-   
+          inc_minutes  <=0 ; 
+      end
+        else begin
+               if (sec_ctr == 59) begin
+                   sec_ctr <= 0;
+                   inc_minutes <= 1;
+               end
+               else begin
+                   sec_ctr <= sec_ctr + 1;
+                   inc_minutes <= 0;  //
+               end
+            end
+         end
+      
+         assign seconds = sec_ctr;
 endmodule
