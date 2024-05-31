@@ -3,23 +3,30 @@
 module minutes (
    input inc_minutes,
    input reset,
-   output inc_hours,
+   output reg inc_hours,
    output [5:0] minutes
    );
    
    reg [5:0] min_ctr = 0;
    
    always @ (posedge inc_minutes or posedge reset) begin
-       if(reset)
+       if(reset) begin
           min_ctr <= 0;
-       else
-          if(min_ctr == 59)
+          inc_hours  <=0;
+          end
+       else begin
+          if(min_ctr == 59) begin
               min_ctr <= 0;
-          else
-             min_ctr <= min_ctr +1;
-   end
-   
-   assign inc_hours = (min_ctr == 59) ? 1:0;
+              inc_hours  <=1;
+              end
+              
+         else begin
+         min_ctr <= min_ctr + 1;
+         inc_hours <= 0;  //
+            end
+          end
+    end
+ 
    assign minutes = min_ctr;
    
 endmodule
