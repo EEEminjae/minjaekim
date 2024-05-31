@@ -12,17 +12,18 @@ module seg_display(
     output reg [6:0] seg,
     output reg [7:0] an
 );
-  parameter NULL = 7'b1111111;      // NULL
-  parameter ZERO = 7'b1000000;      // 0
-  parameter ONE = 7'b1111001;       // 1
-  parameter TWO = 7'b0100100;       // 2
-  parameter THREE = 7'b0110000;     // 3
-  parameter FOUR = 7'b0011001;      // 4
-  parameter FIVE = 7'b0010010;      // 5
-  parameter SIX = 7'b0000010;       // 6
-  parameter SEVEN = 7'b1111000;     // 7
-  parameter EIGHT = 7'b0000000;     // 8
-  parameter NINE = 7'b0010000;      // 9
+    // seg gfedcba 
+  parameter NULL = 7'b000_0000;      // NULL
+  parameter ZERO = 7'b011_1111;      // 0
+  parameter ONE = 7'b000_0110;       // 1
+  parameter TWO = 7'b101_1011;       // 2
+  parameter THREE = 7'b100_1111;     // 3
+  parameter FOUR = 7'b100_0110;      // 4
+  parameter FIVE = 7'b110_1101;      // 5
+  parameter SIX = 7'b111_1101;       // 6
+  parameter SEVEN = 7'b000_0111;     // 7
+  parameter EIGHT = 7'b111_1111;     // 8
+  parameter NINE = 7'b110_1111;      // 9
 
   reg [2:0] anode_select;
   reg [16:0] anode_timer;
@@ -43,14 +44,14 @@ module seg_display(
 
   always @ (*) begin
       case (anode_select)
-          3'b000: an = 8'b0111_1111; // Null
-          3'b001: an = 8'b1011_1111; // Null
-          3'b010: an = 8'b1101_1111; // hour_tens
-          3'b011: an = 8'b1110_1111; // hour_ones
-          3'b100: an = 8'b1111_0111; // minute_tens
-          3'b101: an = 8'b1111_1011; // minute_ones
-          3'b110: an = 8'b1111_1101; // second_tens
-          3'b111: an = 8'b1111_1110; // second_ones
+          3'b000: an = 8'b1000_0000; // Null
+          3'b001: an = 8'b0100_0000; // Null
+          3'b010: an = 8'b0010_0000; // hour_tens
+          3'b011: an = 8'b0001_0000; // hour_ones
+          3'b100: an = 8'b0000_1000; // minute_tens
+          3'b101: an = 8'b0000_0100; // minute_ones
+          3'b110: an = 8'b0000_0010; // second_tens
+          3'b111: an = 8'b0000_0001; // second_ones
       endcase
   end
 
@@ -83,7 +84,7 @@ module seg_display(
                   4'b0110: seg = SIX;
                   4'b0111: seg = SEVEN;
                   4'b1000: seg = EIGHT;
-                  4'b1009: seg = NINE;
+                  4'b1001: seg = NINE;
                   default: seg = NULL; // 보호로직 추가
               endcase
           end
@@ -98,7 +99,7 @@ module seg_display(
                   4'b0110: seg = SIX;
                   4'b0111: seg = SEVEN;
                   4'b1000: seg = EIGHT;
-                  4'b1009: seg = NINE;
+                  4'b1001: seg = NINE;
                   default: seg = NULL; // 보호로직 추가
               endcase
           end
@@ -113,7 +114,7 @@ module seg_display(
                   4'b0110: seg = SIX;
                   4'b0111: seg = SEVEN;
                   4'b1000: seg = EIGHT;
-                  4'b1009: seg = NINE;
+                  4'b1001: seg = NINE;
                   default: seg = NULL; // 보호로직 추가
               endcase
           end
@@ -128,7 +129,7 @@ module seg_display(
                   4'b0110: seg = SIX;
                   4'b0111: seg = SEVEN;
                   4'b1000: seg = EIGHT;
-                  4'b1009: seg = NINE;
+                  4'b1001: seg = NINE;
                   default: seg = NULL; // 보호로직 추가
               endcase
           end
@@ -143,7 +144,7 @@ module seg_display(
                   4'b0110: seg = SIX;
                   4'b0111: seg = SEVEN;
                   4'b1000: seg = EIGHT;
-                  4'b1009: seg = NINE;
+                  4'b1001: seg = NINE;
                   default: seg = NULL; // 보호로직 추가
               endcase
           end
