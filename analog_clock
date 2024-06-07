@@ -1,0 +1,2181 @@
+`timescale 1ns / 1ps
+//////////////////////////////////////////////////////////////////////////////////
+// Company: 
+// Engineer: 
+// 
+// Create Date: 2024/05/29 17:03:40
+// Design Name: 
+// Module Name: clocky
+// Project Name: 
+// Target Devices: 
+// Tool Versions: 
+// Description: 
+// 
+// Dependencies: 
+// 
+// Revision:
+// Revision 0.01 - File Created
+// Additional Comments:
+// 
+//////////////////////////////////////////////////////////////////////////////////
+
+
+module lcd_rgb(clk, rst, sw15, sw16, up, left, mid, right, down, HSYNC, VSYNC, R_data, G_data, B_data, seg, digit);
+
+input wire clk, rst;
+input sw15, sw16, up, left, mid, right, down;
+
+output HSYNC, VSYNC;
+output [3:0] R_data, G_data, B_data;
+output reg [7:0] seg, digit;
+
+reg [1:0] tft_clk_cnt;
+reg tft_iclk, hsync_1, vsync_1;
+reg [2:0] v;
+reg movclk, segclk, dev_clk;
+reg [3:0] right_cnt = 0;
+integer hsync_cnt, vsync_cnt, movcnt, segcnt, dev_cnt;
+integer sec, min, hr, day, mon, yr;
+integer hou;
+integer pst_sec, pst_min, pst_hr, pst_day, pst_mon, pst_yr;
+integer speed = 8;
+
+reg [7:0] h1; // slope of hand of the clock(hour)
+reg [7:0] h2; // h2(y-y0) + h1(x - x0) = 0
+reg [7:0] m1;// slope of hand of the clock(minute)
+reg [7:0] m2;// m2(y-y0) + m1(x - x0) = 0
+reg [7:0] s1;// slope of hand of the clock(second)
+reg [7:0] s2;// s2(y-y0) + s1(x - x0) = 0
+
+parameter HSYNC_BACK_PORCH = 40;
+parameter HSYNC_FRONT_PORCH = 40;
+parameter VSYNC_BACK_PORCH = 31;
+parameter VSYNC_FRONT_PORCH = 17;
+parameter hsync_width = 928;
+parameter vsync_width = 525;
+parameter x = 540;
+parameter y = 290;
+parameter r = 215;
+
+wire lcd_data_en = (~hsync_1 & ~vsync_1);
+wire hsync_load = (hsync_cnt >= (hsync_width - 1)) ? 1'b1 : 1'b0;
+wire vsync_load = (vsync_cnt >= (vsync_width - 1)) ? 1'b1 : 1'b0;
+
+// generating pixel clock
+always @(posedge clk or negedge rst) begin
+    if(!rst) begin
+        tft_iclk <= 1'b0;
+        tft_clk_cnt <= 2'b00;
+    end
+    else begin
+        if(tft_clk_cnt == 2'b10) begin
+            tft_iclk <= 1'b1;
+            tft_clk_cnt <= 2'b00;
+        end
+        else begin
+            tft_iclk <= 1'b0;
+            tft_clk_cnt <= tft_clk_cnt + 1;
+        end
+    end
+end
+
+// making hsync_cnt and vsync_cnt
+always @(posedge tft_iclk or negedge rst) begin
+    if(!rst) hsync_cnt <= 0;
+    else begin
+        if(hsync_load) hsync_cnt <= 0;
+        else hsync_cnt <= hsync_cnt + 1;
+    end
+end
+
+always @(posedge tft_iclk or negedge rst) begin
+    if(!rst)  hsync_1 <= 1'b1;
+    else begin
+        if((hsync_cnt >= HSYNC_BACK_PORCH) & (hsync_cnt <= (hsync_width - (HSYNC_FRONT_PORCH - 1))))
+            hsync_1 <= 1'b0;
+        else hsync_1 <= 1'b1;
+    end
+end
+
+always @(posedge tft_iclk or negedge rst) begin
+    if(!rst) vsync_cnt <= 0;
+    else begin
+        if(hsync_load) begin
+            if(vsync_load) vsync_cnt <= 0;
+            else vsync_cnt <= vsync_cnt + 1;
+        end
+        else vsync_cnt <= vsync_cnt;
+    end
+end
+
+always @(posedge tft_iclk or negedge rst) begin
+    if(!rst) vsync_1 <= 1'b1;
+    else begin
+        if((vsync_cnt >= VSYNC_BACK_PORCH) & (vsync_cnt <= (vsync_width - (VSYNC_FRONT_PORCH - 1))))
+            vsync_1 <= 1'b0;
+        else vsync_1 <= 1'b1;
+    end
+end
+
+always @(posedge clk or negedge rst) begin
+  if(!rst) begin
+    dev_cnt <= 0;
+    dev_clk <= 1'b0;
+  end
+  else begin
+    if(dev_cnt >= 50000000/32000) begin
+      dev_cnt <= 0;
+      dev_clk <= ~dev_clk;
+    end
+    else dev_cnt <= dev_cnt + 1;
+  end
+end
+
+// scaling speed
+reg prev_up, prev_left, prev_mid, prev_right, prev_down;
+always @(posedge dev_clk) begin
+    prev_up <= up;
+    prev_left <= left;
+    prev_mid <= mid;
+    prev_right <= right;
+    prev_down <= down;
+end
+
+always @(posedge dev_clk) begin
+    if(sw16) begin
+        if ((prev_mid == 1) & (mid == 0)) speed <= 8; // negedge mid(reset speed)
+        else begin
+            if ((prev_up == 1) & (up == 0)) speed <= speed * 2; // negedge up
+            else if ((prev_down == 1) & (down == 0)) speed <= speed /2; //negedge down
+            else speed <= speed;
+        end
+    end
+end
+
+// generating real clock
+always @(posedge clk or negedge rst) begin
+  if(!rst) begin
+    movcnt <= 0;
+    movclk <= 1'b0;
+  end
+  else if (sw15)
+    movcnt <= movcnt;
+  else begin
+    if(movcnt >= (50000000*8/speed)) begin
+      movcnt <= 0;
+      movclk <= ~movclk;
+    end
+    else movcnt <= movcnt + 1;
+  end
+end
+
+initial begin
+    pst_sec <= 0;
+    pst_min <= 0;
+    pst_hr <= 0;
+    pst_day <= 12;
+    pst_mon <= 6;
+    pst_yr <= 2024;
+end
+
+// second determination
+always@(posedge movclk or negedge rst) begin
+    if (!rst) begin
+            sec <= pst_sec;
+            min <= pst_min;
+            hr <= pst_hr;
+            day <= pst_day;
+            mon <= pst_mon;
+            yr <= pst_yr;
+            right_cnt <= 0;
+    end
+    else begin
+        if (sec == 59) begin
+            sec <= 0;
+            if (min == 59) begin
+                min <= 0;
+                if (hr == 23) begin
+                    hr <= 0;
+                    if (mon == 2) begin // Feb
+                        if ((yr % 4 == 0 & yr % 100 !=0) | yr % 400 == 0) begin // 윤년
+                            if (day == 29) begin
+                                day <= 1;
+                                mon <= mon +1;
+                            end
+                            else
+                                day <= day + 1;
+                        end
+                        else begin
+                            if (day == 28) begin
+                                day <= 1;
+                                mon <= mon +1;
+                            end
+                            else
+                                day <= day +1;
+                        end
+                    end
+                    else if (mon == 4 | mon == 6 | mon == 9 | mon == 11) begin // Apr, Jun, Sep, Nov
+                        if (day == 30) begin
+                            day <= 1;
+                            mon <= mon +1;
+                        end
+                        else
+                            day <= day + 1;
+                    end
+                    else begin // Jan, Mar, May, Jul, Aug, Oct, Dec
+                        if (day == 31) begin
+                            day <= 1;
+                            mon <= mon +1;
+                            if (mon == 12) begin
+                                mon <= 1;
+                                yr <= yr +1;
+                            end
+                        end
+                        else
+                            day <= day +1;
+                    end
+                end
+                else
+                    hr <= hr +1;
+            end
+            else
+                min <= min + 1;
+        end
+        else  sec <= sec + 1;
+    end
+end
+
+always @(hr or min) begin
+    hou <= (hr % 12) * 5 + (min / 12);
+end
+
+
+always @(sec) begin // 초침
+  if (sec % 30 == 0) begin // 0초, 30초는 기울기가 무한
+    s1 <= 0; //1/0 ->00
+    s2 <= 1;
+  end
+  else if ((sec % 30 == 1) | (sec % 30 == 29)) begin // 1, 31초는 기울기가  tan(84) , 29, 59초는 기울기가  -tan(84)  
+    s1 <= 2;  // tan(84) = 9.5143 
+    s2 <= 19; // 19/2
+  end
+  else if ((sec % 30 == 2) | (sec % 30 == 28)) begin // 2, 32초는 기울기가  tan(78) , 28, 58초는 기울기가  -tan(78)  
+    s1 <= 5; // tan(78) = 4.7046
+    s2 <= 23; // 47/10
+  end
+  else if ((sec % 30 == 3) | (sec % 30 == 27)) begin // 3, 33초는 기울기가  tan(72) , 27, 57초는 기울기가  -tan(72)  
+    s1 <= 10; // tan(72) = 3.0776
+    s2 <= 31; // 3/1
+  end
+  else if ((sec % 30 == 4) | (sec % 30 == 26)) begin // 4, 34초는 기울기가  tan(66) , 26, 56초는 기울기가  -tan(66)  
+    s1 <= 5;  // tan(66) = 2.2460
+    s2 <= 11; // 11/5
+  end
+  else if ((sec % 30 == 5) | (sec % 30 == 25)) begin // 5, 35초는 기울기가  tan(60) , 25, 55초는 기울기가  -tan(60)  
+    s1 <= 10; // tan(60) = 1.7320
+    s2 <= 17; // 17/10
+  end
+  else if ((sec % 30 == 6) | (sec % 30 == 24)) begin // 6, 36초는 기울기가  tan(54) , 24, 54초는 기울기가  -tan(54)  
+    s1 <= 10; // tan(54) = 1.3763
+    s2 <= 13; // 13/10
+  end
+  else if ((sec % 30 == 7) | (sec % 30 == 23)) begin // 7, 37초는 기울기가  tan(48) , 23, 53초는 기울기가  -tan(48)  
+    s1 <= 10; // tan(48) = 1.110
+    s2 <= 11; // 11/10
+  end
+  else if ((sec % 30 == 8) | (sec % 30 == 22)) begin // 8, 38초는 기울기가  tan(42) , 22, 52초는 기울기가  -tan(42)  
+    s1 <= 10; // tan(42) = 0.9004
+    s2 <= 9;  // 9/10
+  end
+  else if ((sec % 30 == 9) | (sec % 30 == 21)) begin // 9, 39초는 기울기가  tan(36) , 21, 51초는 기울기가  -tan(36)  
+    s1 <= 13; // tan(36) = 0.7265
+    s2 <= 9; // 18/25
+  end
+  else if ((sec % 30 == 10) | (sec % 30 == 20)) begin // 10, 40초는 기울기가  tan(30) , 20, 50초는 기울기가  -tan(30)  
+    s1 <= 12;// tan(30) = 0.5773
+    s2 <= 7; // 57/100
+  end
+  else if ((sec % 30 == 11) | (sec % 30 == 19)) begin // 11, 41초는 기울기가  tan(24) , 19, 49초는 기울기가  -tan(24)  
+    s1 <= 11; // tan(24) = 0.4452
+    s2 <= 5; // 11/25
+  end
+  else if ((sec % 30 == 12) | (sec % 30 == 18)) begin // 12, 42초는 기울기가  tan(18) , 18, 48초는 기울기가  -tan(18)  
+    s1 <= 13; // tan(18) = 0.3249
+    s2 <= 4;  // 8/25 
+  end
+  else if ((sec % 30 == 13) | (sec % 30 == 17)) begin // 13, 43초는 기울기가  tan(12) , 17, 47초는 기울기가  -tan(12)  
+    s1 <= 13;// tan(12) = 0.2125
+    s2 <= 3; // 21/100
+  end
+  else if ((sec % 30 == 14) | (sec % 30 == 16)) begin // 14, 44초는 기울기가  tan(6) , 16, 46초는 기울기가  -tan(6)  
+    s1 <= 10; // tan(6) = 0.1051
+    s2 <= 1;  // 1/10
+  end
+  else if (sec % 30 == 15) begin // 15, 45초는 기울기가  tan(0) , 29, 59초는 기울기가  -tan(0)  
+    s1 <= 1;  // tan(0) = 0
+    s2 <= 0;  // 0/1
+  end
+end
+
+always @(min) begin // 분침
+  if (min % 30 == 0) begin // 0초, 30초는 기울기가 무한
+    m1 <= 0; //1/0 ->00
+    m2 <= 1;
+  end
+  else if ((min % 30 == 1) | (min % 30 == 29)) begin // 1, 31초는 기울기가  tan(84) , 29, 59초는 기울기가  -tan(84)  
+    m1 <= 2;  // tan(84) = 9.5143 
+    m2 <= 19; // 19/2
+  end
+  else if ((min % 30 == 2) | (min % 30 == 28)) begin // 2, 32초는 기울기가  tan(78) , 28, 58초는 기울기가  -tan(78)  
+    m1 <= 5; // tan(78) = 4.7046
+    m2 <= 23; // 47/10
+  end
+  else if ((min % 30 == 3) | (min % 30 == 27)) begin // 3, 33초는 기울기가  tan(72) , 27, 57초는 기울기가  -tan(72)  
+    m1 <= 10; // tan(72) = 3.0776
+    m2 <= 31; // 3/1
+  end
+  else if ((min % 30 == 4) | (min % 30 == 26)) begin // 4, 34초는 기울기가  tan(66) , 26, 56초는 기울기가  -tan(66)  
+    m1 <= 5;  // tan(66) = 2.2460
+    m2 <= 11; // 11/5
+  end
+  else if ((min % 30 == 5) | (min % 30 == 25)) begin // 5, 35초는 기울기가  tan(60) , 25, 55초는 기울기가  -tan(60)  
+    m1 <= 10; // tan(60) = 1.7320
+    m2 <= 17; // 17/10
+  end
+  else if ((min % 30 == 6) | (min % 30 == 24)) begin // 6, 36초는 기울기가  tan(54) , 24, 54초는 기울기가  -tan(54)  
+    m1 <= 10; // tan(54) = 1.3763
+    m2 <= 13; // 13/10
+  end
+  else if ((min % 30 == 7) | (min % 30 == 23)) begin // 7, 37초는 기울기가  tan(48) , 23, 53초는 기울기가  -tan(48)  
+    m1 <= 10; // tan(48) = 1.110
+    m2 <= 11; // 11/10
+  end
+  else if ((min % 30 == 8) | (min % 30 == 22)) begin // 8, 38초는 기울기가  tan(42) , 22, 52초는 기울기가  -tan(42)  
+    m1 <= 10; // tan(42) = 0.9004
+    m2 <= 9;  // 9/10
+  end
+  else if ((min % 30 == 9) | (min % 30 == 21)) begin // 9, 39초는 기울기가  tan(36) , 21, 51초는 기울기가  -tan(36)  
+    m1 <= 13; // tan(36) = 0.7265
+    m2 <= 9; // 18/25
+  end
+  else if ((min % 30 == 10) | (min % 30 == 20)) begin // 10, 40초는 기울기가  tan(30) , 20, 50초는 기울기가  -tan(30)  
+    m1 <= 12;// tan(30) = 0.5773
+    m2 <= 7; // 57/100
+  end
+  else if ((min % 30 == 11) | (min % 30 == 19)) begin // 11, 41초는 기울기가  tan(24) , 19, 49초는 기울기가  -tan(24)  
+    m1 <= 11; // tan(24) = 0.4452
+    m2 <= 5; // 11/25
+  end
+  else if ((min % 30 == 12) | (min % 30 == 18)) begin // 12, 42초는 기울기가  tan(18) , 18, 48초는 기울기가  -tan(18)  
+    m1 <= 13; // tan(18) = 0.3249
+    m2 <= 4;  // 8/25 
+  end
+  else if ((min % 30 == 13) | (min % 30 == 17)) begin // 13, 43초는 기울기가  tan(12) , 17, 47초는 기울기가  -tan(12)  
+    m1 <= 13;// tan(12) = 0.2125
+    m2 <= 3; // 21/100
+  end
+  else if ((min % 30 == 14) | (min % 30 == 16)) begin // 14, 44초는 기울기가  tan(6) , 16, 46초는 기울기가  -tan(6)  
+    m1 <= 10; // tan(6) = 0.1051
+    m2 <= 1;  // 1/10
+  end
+  else if (min % 30 == 15) begin // 15, 45초는 기울기가  tan(0) , 29, 59초는 기울기가  -tan(0)  
+    m1 <= 1;  // tan(0) = 0
+    m2 <= 0;  // 0/1
+  end
+end
+
+
+always @(hou) begin // 시침
+  if (hou % 30 == 0) begin // 0초, 30초는 기울기가 무한
+    h1 <= 0; //1/0 ->00
+    h2 <= 1;
+  end
+  else if ((hou % 30 == 1) | (hou % 30 == 29)) begin // 1, 31초는 기울기가  tan(84) , 29, 59초는 기울기가  -tan(84)  
+    h1 <= 2;  // tan(84) = 9.5143 
+    h2 <= 19; // 19/2
+  end
+  else if ((hou % 30 == 2) | (hou % 30 == 28)) begin // 2, 32초는 기울기가  tan(78) , 28, 58초는 기울기가  -tan(78)  
+    h1 <= 5; // tan(78) = 4.7046
+    h2 <= 23; // 47/10
+  end
+  else if ((hou % 30 == 3) | (hou % 30 == 27)) begin // 3, 33초는 기울기가  tan(72) , 27, 57초는 기울기가  -tan(72)  
+    h1 <= 10; // tan(72) = 3.0776
+    h2 <= 31; // 3/1
+  end
+  else if ((hou % 30 == 4) | (hou % 30 == 26)) begin // 4, 34초는 기울기가  tan(66) , 26, 56초는 기울기가  -tan(66)  
+    h1 <= 5;  // tan(66) = 2.2460
+    h2 <= 11; // 11/5
+  end
+  else if ((hou % 30 == 5) | (hou % 30 == 25)) begin // 5, 35초는 기울기가  tan(60) , 25, 55초는 기울기가  -tan(60)  
+    h1 <= 10; // tan(60) = 1.7320
+    h2 <= 17; // 17/10
+  end
+  else if ((hou % 30 == 6) | (hou % 30 == 24)) begin // 6, 36초는 기울기가  tan(54) , 24, 54초는 기울기가  -tan(54)  
+    h1 <= 10; // tan(54) = 1.3763
+    h2 <= 13; // 13/10
+  end
+  else if ((hou % 30 == 7) | (hou % 30 == 23)) begin // 7, 37초는 기울기가  tan(48) , 23, 53초는 기울기가  -tan(48)  
+    h1 <= 10; // tan(48) = 1.110
+    h2 <= 11; // 11/10
+  end
+  else if ((hou % 30 == 8) | (hou % 30 == 22)) begin // 8, 38초는 기울기가  tan(42) , 22, 52초는 기울기가  -tan(42)  
+    h1 <= 10; // tan(42) = 0.9004
+    h2 <= 9;  // 9/10
+  end
+  else if ((hou % 30 == 9) | (hou % 30 == 21)) begin // 9, 39초는 기울기가  tan(36) , 21, 51초는 기울기가  -tan(36)  
+    h1 <= 13; // tan(36) = 0.7265
+    h2 <= 9; // 18/25
+  end
+  else if ((hou % 30 == 10) | (hou % 30 == 20)) begin // 10, 40초는 기울기가  tan(30) , 20, 50초는 기울기가  -tan(30)  
+    h1 <= 12;// tan(30) = 0.5773
+    h2 <= 7; // 57/100
+  end
+  else if ((hou % 30 == 11) | (hou % 30 == 19)) begin // 11, 41초는 기울기가  tan(24) , 19, 49초는 기울기가  -tan(24)  
+    h1 <= 11; // tan(24) = 0.4452
+    h2 <= 5; // 11/25
+  end
+  else if ((hou % 30 == 12) | (hou % 30 == 18)) begin // 12, 42초는 기울기가  tan(18) , 18, 48초는 기울기가  -tan(18)  
+    h1 <= 13; // tan(18) = 0.3249
+    h2 <= 4;  // 8/25 
+  end
+  else if ((hou % 30 == 13) | (hou % 30 == 17)) begin // 13, 43초는 기울기가  tan(12) , 17, 47초는 기울기가  -tan(12)  
+    h1 <= 13;// tan(12) = 0.2125
+    h2 <= 3; // 21/100
+  end
+  else if ((hou % 30 == 14) | (hou % 30 == 16)) begin // 14, 44초는 기울기가  tan(6) , 16, 46초는 기울기가  -tan(6)  
+    h1 <= 10; // tan(6) = 0.1051
+    h2 <= 1;  // 1/10
+  end
+  else if (hou % 30 == 15) begin // 15, 45초는 기울기가  tan(0) , 29, 59초는 기울기가  -tan(0)  
+    h1 <= 1;  // tan(0) = 0
+    h2 <= 0;  // 0/1
+  end
+end
+/*
+always @(posedge tft_iclk or negedge rst) begin
+    if(!rst) v <= 0;
+    else begin
+        if((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= r*r & (vsync_cnt - y)**2 + (hsync_cnt - x)**2 >= (r-3)**2) // drawing body of clock
+            v <= 7;
+        else if ((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-3)**2 & (vsync_cnt - y)**2 + (hsync_cnt - x)**2 >= (r-20)**2) begin // drawing scale of the clock (hour)
+          if (((hsync_cnt >= x) & (hsync_cnt <= x + 7)) | ((vsync_cnt <= y) & (vsync_cnt > y - 7)))
+            v <= 7;
+          else if ((10*(vsync_cnt - y) + 17*(hsync_cnt - x) <= 70) & (10*(vsync_cnt - y) + 17*(hsync_cnt - x) >= 0))
+            v <= 7;
+          else if ((10*(vsync_cnt - y) - 17*(hsync_cnt - x) <= 70) & (10*(vsync_cnt - y) - 17*(hsync_cnt - x) >= 0))
+            v <= 7;
+          else if ((100*(vsync_cnt - y) + 57*(hsync_cnt - x) <= 200) & (100*(vsync_cnt - y) + 57*(hsync_cnt - x) >= 0))
+            v <= 7;
+          else if ((100*(vsync_cnt - y) - 57*(hsync_cnt - x) <= 200) & (100*(vsync_cnt - y) - 57*(hsync_cnt - x) >= 0))
+            v <= 7;
+          else if ((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-3)**2 & (vsync_cnt - y)**2 + (hsync_cnt - x)**2 >= (r-9)**2) begin // drawing scale of the clock (minute)
+            if ((2*(vsync_cnt - y) + 19*(hsync_cnt - x) <= 10) & (2*(vsync_cnt - y) + 19*(hsync_cnt - x) >= 0))
+              v <= 7;
+            else if ((2*(vsync_cnt - y) - 19*(hsync_cnt - x) <= 30) & (2*(vsync_cnt - y) - 19*(hsync_cnt - x) >= 0))
+              v <= 7;
+            else if ((10*(vsync_cnt - y) + 47*(hsync_cnt - x) <= 100) & (10*(vsync_cnt - y) + 47*(hsync_cnt - x) >= 0))
+              v <= 7;
+            else if ((10*(vsync_cnt - y) - 47*(hsync_cnt - x) <= 100) & (10*(vsync_cnt - y) - 47*(hsync_cnt - x) >= 0))
+              v <= 7;
+            else if ((1*(vsync_cnt - y) + 3*(hsync_cnt - x) <= 10) & (1*(vsync_cnt - y) + 3*(hsync_cnt - x) >= 0))
+              v <= 7;
+            else if ((1*(vsync_cnt - y) - 3*(hsync_cnt - x) <= 10) & (1*(vsync_cnt - y) - 3*(hsync_cnt - x) >= 0))
+              v <= 7;
+            else if ((5*(vsync_cnt - y) + 11*(hsync_cnt - x) <= 30) & (5*(vsync_cnt - y) + 11*(hsync_cnt - x) >= 0))
+              v <= 7;
+            else if ((5*(vsync_cnt - y) - 11*(hsync_cnt - x) <= 30) & (5*(vsync_cnt - y) - 11*(hsync_cnt - x) >= 0))
+              v <= 7; 
+            else if ((10*(vsync_cnt - y) + 13*(hsync_cnt - x) <= 30) & (10*(vsync_cnt - y) + 13*(hsync_cnt - x) >= 0))
+              v <= 7;
+            else if ((10*(vsync_cnt - y) - 13*(hsync_cnt - x) <= 30) & (10*(vsync_cnt - y) - 13*(hsync_cnt - x) >= 0))
+              v <= 7;  
+            else if ((10*(vsync_cnt - y) + 11*(hsync_cnt - x) <= 30) & (10*(vsync_cnt - y) + 11*(hsync_cnt - x) >= 0))
+              v <= 7;
+            else if ((10*(vsync_cnt - y) - 11*(hsync_cnt - x) <= 30) & (10*(vsync_cnt - y) - 11*(hsync_cnt - x) >= 0))
+              v <= 7;
+            else if ((10*(vsync_cnt - y) + 9*(hsync_cnt - x) <= 30) & (10*(vsync_cnt - y) + 9*(hsync_cnt - x) >= 0))
+              v <= 7;
+            else if ((10*(vsync_cnt - y) - 9*(hsync_cnt - x) <= 30) & (10*(vsync_cnt - y) - 9*(hsync_cnt - x) >= 0))
+              v <= 7;
+            else if ((25*(vsync_cnt - y) + 18*(hsync_cnt - x) <= 30) & (25*(vsync_cnt - y) + 18*(hsync_cnt - x) >= 0))
+              v <= 7;
+            else if ((25*(vsync_cnt - y) - 18*(hsync_cnt - x) <= 30) & (25*(vsync_cnt - y) - 18*(hsync_cnt - x) >= 0))
+              v <= 7;
+            else if ((25*(vsync_cnt - y) + 11*(hsync_cnt - x) <= 30) & (25*(vsync_cnt - y) + 11*(hsync_cnt - x) >= 0))
+              v <= 7;
+            else if ((25*(vsync_cnt - y) - 11*(hsync_cnt - x) <= 30) & (25*(vsync_cnt - y) - 11*(hsync_cnt - x) >= 0))
+              v <= 7;
+            else if ((25*(vsync_cnt - y) + 8*(hsync_cnt - x) <= 30) & (25*(vsync_cnt - y) + 8*(hsync_cnt - x) >= 0))
+              v <= 7;  
+            else if ((25*(vsync_cnt - y) - 8*(hsync_cnt - x) <= 30) & (25*(vsync_cnt - y) - 8*(hsync_cnt - x) >= 0))  
+              v <= 7;
+            else if ((100*(vsync_cnt - y) + 21*(hsync_cnt - x) <= 70) & (100*(vsync_cnt - y) + 21*(hsync_cnt - x) >= 0))
+              v <= 7;  
+            else if ((100*(vsync_cnt - y) - 21*(hsync_cnt - x) <= 70) & (100*(vsync_cnt - y) - 21*(hsync_cnt - x) >= 0))  
+              v <= 7;
+            else if ((10*(vsync_cnt - y) + 1*(hsync_cnt - x) <= 20) & (10*(vsync_cnt - y) + 1*(hsync_cnt - x) >= 0))
+              v <= 7;  
+            else if ((10*(vsync_cnt - y) - 1*(hsync_cnt - x) <= 20) & (10*(vsync_cnt - y) - 1*(hsync_cnt - x) >= 0))  
+              v <= 7;
+            else
+              v <= 0;             
+          end
+          else
+            v <= 0;
+        end
+        else if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-50)**2)) begin  // length of the hand of the clock (minute, second)
+          if ((sec == min) & (min == hou) & (sec == hou)) begin                 // Case 1) sec = min = hou
+            if (sec == 0) begin                                 //  sec = 0
+              if ((hsync_cnt <= x + 1) & (vsync_cnt <= y)) begin
+                if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 5) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) begin  // hand of the clock
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))  //length of the hand of the clock (hour)
+                    v <= 7;  // color of hand of the clock (hour)
+                  else
+                    v <= 3;  // color of hand of the clock (minute)
+                end
+                else
+                  v <= 0;
+              end
+              else
+                v <= 0;
+            end
+            else if ((sec > 0) & (sec <= 15)) begin                                 // 0 < sec <= 15
+              if ((hsync_cnt >= x) & (vsync_cnt <= y + 1)) begin
+                if (sec == 3) begin
+                  if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 5) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) begin
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;
+                    else
+                      v <= 3;
+                  end
+                  else
+                    v <= 0;
+                end
+                else if (sec != 3) begin
+                  if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) begin  // hand of the clock
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))  //length of the hand of the clock (hour)
+                      v <= 7;  // color of hand of the clock (hour)
+                    else
+                      v <= 3;  // color of hand of the clock (minute)
+                  end
+                  else
+                    v <= 0;
+                end
+              end
+              else
+                v <= 0;
+            end
+            else if ((sec >= 30) & (sec < 45)) begin                           // 30 <= sec < 45
+              if ((hsync_cnt <= x + 1) & (vsync_cnt >= y)) begin
+                if (sec == 33) begin
+                  if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 5) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) begin
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;
+                    else
+                      v <= 3;  
+                  end
+                  else
+                    v <= 0;
+                end
+                else if (sec != 33) begin
+                  if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) begin
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;
+                    else
+                      v <= 3;  
+                  end
+                  else
+                    v <= 0;
+                end
+              end
+              else
+                v <= 0;
+            end   
+            else if (sec == 45) begin                           // sec = 45
+              if ((hsync_cnt <= x) & (vsync_cnt <= y + 1)) begin
+                if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 5) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) begin
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                    v <= 7;
+                  else
+                    v <= 3;  
+                end
+                else
+                  v <= 0;
+              end
+              else
+                v <= 0; 
+            end                   
+            else if ((sec > 15) & (sec < 30)) begin                             // 15 < sec < 30
+              if ((hsync_cnt >= x) & (vsync_cnt >= y)) begin 
+                if (sec == 27) begin 
+                  if ((s1*(vsync_cnt - y) - s2*(hsync_cnt - x) <= 5) & (s1*(vsync_cnt - y) - s2*(hsync_cnt - x) >= 0)) begin
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;
+                    else
+                      v <=3;  
+                  end
+                  else
+                    v <= 0;
+                end
+                else if (sec != 27)begin
+                  if ((s1*(vsync_cnt - y) - s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) - s2*(hsync_cnt - x) >= 0)) begin
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;
+                    else
+                      v <=3;  
+                  end
+                  else
+                    v <= 0;
+                end
+              end
+              else
+                v <= 0;
+            end
+            else if ((sec > 45) & (sec <= 59)) begin                            // 45 < sec < 60
+              if ((hsync_cnt <= x) & (vsync_cnt <= y)) begin
+                if (sec == 57) begin
+                  if ((s1*(vsync_cnt - y) - s2*(hsync_cnt - x) <= 5) & (s1*(vsync_cnt - y) - s2*(hsync_cnt - x) >= 0)) begin
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;
+                    else
+                      v <= 3;  
+                  end
+                  else
+                    v <= 0;
+                end
+                else if (sec != 57) begin
+                  if ((s1*(vsync_cnt - y) - s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) - s2*(hsync_cnt - x) >= 0)) begin
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;
+                    else
+                      v <= 3;  
+                  end
+                  else
+                    v <= 0;
+                end
+              end
+              else
+                v <= 0;
+            end            
+          end
+          else if ((sec == hou) & (min != sec)) begin                             // Case 2) sec = hou & sec != min
+            if (sec == 0) begin                                 //  sec = 0
+              if ((hsync_cnt <= x + 1) & (vsync_cnt <= y)) begin
+                if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 5) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) begin  // hand of the clock
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))  //length of the hand of the clock (hour)
+                    v <= 7;  // color of hand of the clock (hour)
+                  else
+                    v <= 1;  // color of hand of the clock (minute)
+                end
+                else
+                  v <= 0;
+              end
+              else
+                v <= 0;  
+            end
+            else if ((sec > 0) & (sec <= 15)) begin                                   
+              if ((hsync_cnt >= x) & (vsync_cnt <= y + 1)) begin
+                if (sec == 3) begin
+                  if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 5) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) begin
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;
+                    else
+                      v <= 1;  
+                  end
+                  else
+                    v <= 0;
+                end
+                else if (sec != 3) begin
+                  if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) begin
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;
+                    else
+                      v <= 1;  
+                  end
+                  else
+                    v <= 0;
+                end
+              end
+              else
+                v <= 0;
+            end
+            else if ((sec >= 30) & (sec < 45)) begin
+              if ((hsync_cnt <= x + 1) & (vsync_cnt >= y)) begin
+                if (sec == 33)
+                  if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 5) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) begin
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;
+                    else
+                      v <= 1;  
+                  end
+                  else
+                    v <= 0;                
+                end
+                else if (sec != 33) begin
+                  if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) begin
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;
+                    else
+                      v <= 1;  
+                  end
+                  else
+                    v <= 0;  
+                end
+              end
+              else
+                v <= 0;
+            end              
+            else if (sec == 45) begin                                 //  sec = 0
+              if ((hsync_cnt <= x) & (vsync_cnt <= y + 1)) begin
+                if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 5) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) begin  // hand of the clock
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))  //length of the hand of the clock (hour)
+                    v <= 7;  // color of hand of the clock (hour)
+                  else
+                    v <= 1;  // color of hand of the clock (minute)
+                end
+                else
+                  v <= 0;
+              end
+              else
+                v <= 0;  
+            end
+            else if ((sec > 15) & (sec < 30)) begin
+              if ((hsync_cnt >= x) & (vsync_cnt >= y)) begin
+                if (sec == 27) begin
+                  if ((s1*(vsync_cnt - y) - s2*(hsync_cnt - x) <= 5) & (s1*(vsync_cnt - y) - s2*(hsync_cnt - x) >= 0)) begin
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;
+                    else
+                      v <= 1;  
+                  end
+                  else
+                    v <= 0;                
+                end
+                else if (sec != 27) begin
+                  if ((s1*(vsync_cnt - y) - s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) - s2*(hsync_cnt - x) >= 0)) begin
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;
+                    else
+                      v <= 1;  
+                  end
+                  else
+                    v <= 0; 
+                end
+              end
+              else
+                v <= 0;
+            end
+            else if ((sec > 45) & (sec <= 59)) begin
+              if ((hsync_cnt <= x) & (vsync_cnt <= y)) begin
+                if (sec == 57) begin
+                  if ((s1*(vsync_cnt - y) - s2*(hsync_cnt - x) <= 5) & (s1*(vsync_cnt - y) - s2*(hsync_cnt - x) >= 0)) begin
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;
+                    else
+                      v <= 1;  
+                  end 
+                  else
+                    v <= 0;                
+                end
+                else if (sec != 57)begin
+                  if ((s1*(vsync_cnt - y) - s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) - s2*(hsync_cnt - x) >= 0)) begin
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;
+                    else
+                      v <= 1;  
+                  end 
+                  else
+                    v <= 0; 
+                end
+              end
+              else
+                v <= 0;
+            end
+            if (min == 0) begin
+              if ((hsync_cnt <= x + 1) & (vsync_cnt <= y + 1)) begin
+                if ((m1*(vsync_cnt - y) + m2*(hsync_cnt - x) <= 5) & (m1*(vsync_cnt - y) + m2*(hsync_cnt - x) >= 0))
+                  v <= 3;
+              end
+            end
+            else if ((min > 0) & (min <= 15)) begin
+              if ((hsync_cnt >= x) & (vsync_cnt <= y + 1)) begin
+                if (min == 3) begin
+                  if ((m1*(vsync_cnt - y) + m2*(hsync_cnt - x) <= 5) & (m1*(vsync_cnt - y) + m2*(hsync_cnt - x) >= 0))
+                    v <= 3;
+                end
+                else if (min != 3)begin
+                  if ((m1*(vsync_cnt - y) + m2*(hsync_cnt - x) <= 20) & (m1*(vsync_cnt - y) + m2*(hsync_cnt - x) >= 0))
+                    v <= 3;
+                end
+              end
+            end
+            else if ((min >= 30) & (min < 45)) begin  
+              if ((hsync_cnt <= x + 1) & (vsync_cnt >= y)) begin
+                if (min == 33) begin
+                  if ((m1*(vsync_cnt - y) + m2*(hsync_cnt - x) <= 5) & (m1*(vsync_cnt - y) + m2*(hsync_cnt - x) >= 0))
+                    v <= 3;
+                end
+                else if (min != 33)begin
+                  if ((m1*(vsync_cnt - y) + m2*(hsync_cnt - x) <= 20) & (m1*(vsync_cnt - y) + m2*(hsync_cnt - x) >= 0))
+                    v <= 3;
+                end
+              end              
+            end
+            else if (min == 45) begin
+              if ((hsync_cnt <= x) & (vsync_cnt <= y + 1)) begin
+                if ((m1*(vsync_cnt - y) + m2*(hsync_cnt - x) <= 5) & (m1*(vsync_cnt - y) + m2*(hsync_cnt - x) >= 0))
+                   v <= 3;
+              end
+            end
+            else if ((min > 15) & (min < 30)) begin  
+              if ((hsync_cnt >= x) & (vsync_cnt >= y)) begin
+                if (min == 27) begin
+                  if ((m1*(vsync_cnt - y) - m2*(hsync_cnt - x) <= 5) & (m1*(vsync_cnt - y) - m2*(hsync_cnt - x) >= 0)) 
+                    v <= 3;
+                end
+                else if (min != 27) begin
+                  if ((m1*(vsync_cnt - y) - m2*(hsync_cnt - x) <= 20) & (m1*(vsync_cnt - y) - m2*(hsync_cnt - x) >= 0)) 
+                    v <= 3;
+                end              
+              end
+            end   
+            else if ((min > 45) & (min <= 59)) begin  
+              if ((hsync_cnt <= x) & (vsync_cnt <= y)) begin
+                if (min == 57) begin
+                  if ((m1*(vsync_cnt - y) - m2*(hsync_cnt - x) <= 5) & (m1*(vsync_cnt - y) - m2*(hsync_cnt - x) >= 0))  
+                    v <= 3;
+                end 
+                else if (min != 57)begin
+                  if ((m1*(vsync_cnt - y) - m2*(hsync_cnt - x) <= 20) & (m1*(vsync_cnt - y) - m2*(hsync_cnt - x) >= 0))  
+                    v <= 3;
+                end
+              end              
+            end                                                     
+          end
+          else if ((sec == min) & (min != hou)) begin                                      //sec = min & min != hou
+            if (sec == 0) begin
+              if ((hsync_cnt <= x + 1) & (vsync_cnt <= y)) begin
+                if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 5) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0))
+                  v <= 3; 
+                else
+                  v <= 0; 
+              end
+              else
+                v <= 0;
+            end
+            else if ((sec > 0) & (sec <= 15)) begin
+              if ((hsync_cnt >= x) & (vsync_cnt <= y + 1)) begin
+                if (sec == 3) begin
+                  if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 5) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0))
+                    v <= 3; 
+                  else
+                    v <= 0; 
+                end
+                else if (sec != 3)begin
+                  if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0))
+                    v <= 3; 
+                  else
+                    v <= 0; 
+                end
+              end
+              else
+                v <= 0;
+            end
+            else if ((sec >= 30) & (sec < 45)) begin
+              if ((hsync_cnt <= x + 1) & (vsync_cnt >= y)) begin
+                if (sec == 33) begin
+                  if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 5) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) 
+                    v <= 3;  
+                  else
+                    v <= 0; 
+                end 
+                else if (sec != 33)begin
+                  if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) 
+                    v <= 3;  
+                  else
+                    v <= 0;
+                end
+              end
+              else
+                v <= 0;
+            end 
+            else if (sec == 45) begin
+              if ((hsync_cnt <= x) & (vsync_cnt <= y + 1)) begin
+                if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 5) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) 
+                  v <= 3;  
+                else
+                  v <= 0; 
+              end
+              else
+                v <= 0;
+            end              
+            else if ((sec > 15) & (sec < 30)) begin
+              if ((hsync_cnt >= x) & (vsync_cnt >= y)) begin
+                if (sec == 27) begin
+                  if ((s1*(vsync_cnt - y) - s2*(hsync_cnt - x) <= 5) & (s1*(vsync_cnt - y) - s2*(hsync_cnt - x) >= 0))
+                    v <= 3; 
+                  else
+                    v <= 0; 
+                end
+                else if (sec != 27)begin
+                  if ((s1*(vsync_cnt - y) - s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) - s2*(hsync_cnt - x) >= 0))
+                    v <= 3; 
+                  else
+                    v <= 0; 
+                end
+              end
+              else
+                v <= 0;                  
+            end
+            else if ((sec > 45) & (sec <= 59)) begin
+              if ((hsync_cnt <= x) & (vsync_cnt <= y)) begin
+                if (sec == 57) begin
+                  if ((s1*(vsync_cnt - y) - s2*(hsync_cnt - x) <= 5) & (s1*(vsync_cnt - y) - s2*(hsync_cnt - x) >= 0))
+                    v <= 3; 
+                  else
+                    v <= 0; 
+                end
+                else if (sec != 57)begin
+                  if ((s1*(vsync_cnt - y) - s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) - s2*(hsync_cnt - x) >= 0))
+                    v <= 3; 
+                  else
+                    v <= 0; 
+                end
+              end
+              else
+                v <= 0;
+            end 
+            if (hou == 0) begin
+              if ((hsync_cnt <= x + 1) & (vsync_cnt <= y)) begin
+                if ((h1*(vsync_cnt - y) + h2*(hsync_cnt - x) <= 5) & (h1*(vsync_cnt - y) + h2*(hsync_cnt - x) >= 0)) begin 
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                    v <= 7;
+                end
+              end
+            end
+            else if ((hou > 0) & (hou <= 15)) begin
+              if ((hsync_cnt >= x) & (vsync_cnt <= y + 1)) begin
+                if (hou == 3) begin
+                  if ((h1*(vsync_cnt - y) + h2*(hsync_cnt - x) <= 5) & (h1*(vsync_cnt - y) + h2*(hsync_cnt - x) >= 0)) begin 
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;
+                  end
+                end
+                else if (hou != 3)begin
+                  if ((h1*(vsync_cnt - y) + h2*(hsync_cnt - x) <= 20) & (h1*(vsync_cnt - y) + h2*(hsync_cnt - x) >= 0)) begin 
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;
+                  end
+                end
+              end
+            end
+            else if ((hou >= 30) & (hou < 45)) begin  
+              if ((hsync_cnt <= x + 1) & (vsync_cnt >= y)) begin
+                if (hou == 33) begin
+                  if ((h1*(vsync_cnt - y) + h2*(hsync_cnt - x) <= 5) & (h1*(vsync_cnt - y) + h2*(hsync_cnt - x) >= 0)) begin
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;                
+                  end
+                end
+                else if (hou != 33)begin
+                  if ((h1*(vsync_cnt - y) + h2*(hsync_cnt - x) <= 20) & (h1*(vsync_cnt - y) + h2*(hsync_cnt - x) >= 0)) begin
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;                
+                  end
+                end
+              end              
+            end
+            else if (hou == 45) begin  
+              if ((hsync_cnt <= x) & (vsync_cnt <= y + 1)) begin
+                if ((h1*(vsync_cnt - y) + h2*(hsync_cnt - x) <= 5) & (h1*(vsync_cnt - y) + h2*(hsync_cnt - x) >= 0)) begin
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                    v <= 7;                
+                end
+              end              
+            end
+            else if ((hou > 15) & (hou < 30)) begin  
+              if ((hsync_cnt >= x) & (vsync_cnt >= y)) begin
+                if (hou == 27) begin
+                  if ((h1*(vsync_cnt - y) - h2*(hsync_cnt - x) <= 5) & (h1*(vsync_cnt - y) - h2*(hsync_cnt - x) >= 0)) begin 
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;             
+                  end
+                end 
+                else if (hou != 27)begin
+                  if ((h1*(vsync_cnt - y) - h2*(hsync_cnt - x) <= 20) & (h1*(vsync_cnt - y) - h2*(hsync_cnt - x) >= 0)) begin 
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;
+                  end
+                end  
+              end            
+            end   
+            else if ((hou > 45) & (hou <= 59)) begin  
+              if ((hsync_cnt <= x) & (vsync_cnt <= y)) begin
+                if (hou == 57) begin
+                  if ((h1*(vsync_cnt - y) - h2*(hsync_cnt - x) <= 5) & (h1*(vsync_cnt - y) - h2*(hsync_cnt - x) >= 0)) begin 
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;             
+                  end
+                end 
+                else if (hou != 57)begin
+                  if ((h1*(vsync_cnt - y) - h2*(hsync_cnt - x) <= 20) & (h1*(vsync_cnt - y) - h2*(hsync_cnt - x) >= 0)) begin 
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;
+                  end
+                end  
+              end            
+            end   
+          end
+          else if ((min == hou) & (min != sec)) begin                                      //min = hou & min != sec
+            if (min == 0) begin
+              if ((hsync_cnt <= x + 1) & (vsync_cnt <= y)) begin
+                if ((m1*(vsync_cnt - y) + m2*(hsync_cnt - x) <= 5) & (m1*(vsync_cnt - y) + m2*(hsync_cnt - x) >= 0)) begin
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                    v <= 7;
+                  else
+                    v <= 3;
+                end
+                else
+                  v <= 0;
+              end
+              else
+                v <= 0;
+            end  
+            if ((min > 0) & (min <= 15)) begin
+              if ((hsync_cnt >= x) & (vsync_cnt <= y + 1)) begin
+                if (min == 3) begin
+                  if ((m1*(vsync_cnt - y) + m2*(hsync_cnt - x) <= 5) & (m1*(vsync_cnt - y) + m2*(hsync_cnt - x) >= 0)) begin
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;
+                    else
+                      v <= 3;
+                  end
+                  else
+                    v <= 0;
+                end
+                else if (min != 3)begin
+                  if ((m1*(vsync_cnt - y) + m2*(hsync_cnt - x) <= 20) & (m1*(vsync_cnt - y) + m2*(hsync_cnt - x) >= 0)) begin
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;
+                    else
+                      v <= 3;
+                  end
+                  else
+                    v <= 0;
+                end
+              end
+              else
+                v <= 0;
+            end
+            else if ((min >= 30) & (min < 45)) begin
+              if ((hsync_cnt <= x + 1) & (vsync_cnt >= y)) begin
+                if (min == 33) begin
+                  if ((m1*(vsync_cnt - y) + m2*(hsync_cnt - x) <= 5) & (m1*(vsync_cnt - y) + m2*(hsync_cnt - x) >= 0)) begin
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;
+                    else
+                      v <= 3;
+                  end
+                  else
+                    v <= 0;
+                end
+                else if (min != 33)begin
+                  if ((m1*(vsync_cnt - y) + m2*(hsync_cnt - x) <= 20) & (m1*(vsync_cnt - y) + m2*(hsync_cnt - x) >= 0)) begin
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;
+                    else
+                      v <= 3;
+                  end
+                  else
+                    v <= 0;
+                end
+              end
+              else 
+                v <= 0;
+            end       
+            else if (min == 45) begin
+              if ((hsync_cnt <= x) & (vsync_cnt >= y + 1)) begin
+                if ((m1*(vsync_cnt - y) + m2*(hsync_cnt - x) <= 5) & (m1*(vsync_cnt - y) + m2*(hsync_cnt - x) >= 0)) begin
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                    v <= 7;
+                  else
+                    v <= 3;
+                end
+                else
+                    v <= 0;
+              end
+              else
+                v <= 0;
+            end              
+            else if ((min > 15) & (min < 30)) begin
+              if ((hsync_cnt >= x) & (vsync_cnt >= y)) begin
+                if (min == 27) begin
+                  if ((m1*(vsync_cnt - y) - m2*(hsync_cnt - x) <= 5) & (m1*(vsync_cnt - y) - m2*(hsync_cnt - x) >= 0)) begin
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;   
+                    else
+                      v <= 3;              
+                  end
+                  else
+                    v <= 0;
+                end
+                else if (min != 27)begin
+                  if ((m1*(vsync_cnt - y) - m2*(hsync_cnt - x) <= 20) & (m1*(vsync_cnt - y) - m2*(hsync_cnt - x) >= 0)) begin
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;   
+                    else
+                      v <= 3; 
+                  end
+                  else
+                    v <= 0;
+                end
+              end
+              else
+                v <= 0;
+            end
+            else if ((min > 45) & (min <= 59)) begin
+              if ((hsync_cnt <= x) & (vsync_cnt <= y)) begin
+                if (min == 57) begin
+                  if ((m1*(vsync_cnt - y) - m2*(hsync_cnt - x) <= 5) & (m1*(vsync_cnt - y) - m2*(hsync_cnt - x) >= 0)) begin
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;   
+                    else
+                      v <= 3;              
+                  end
+                  else
+                    v <= 0;
+                end
+                else if (min != 57) begin
+                  if ((m1*(vsync_cnt - y) - m2*(hsync_cnt - x) <= 20) & (m1*(vsync_cnt - y) - m2*(hsync_cnt - x) >= 0)) begin
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;   
+                    else
+                      v <= 3; 
+                  end
+                  else
+                    v <= 0;
+                end
+              end
+              else
+                v <= 0;
+            end
+            if (sec == 0) begin
+              if ((hsync_cnt <= x + 1) & (vsync_cnt <= y)) begin
+                if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 5) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) 
+                  v <= 1;
+              end
+            end
+            else if ((sec > 0) & (sec <= 15)) begin
+              if ((hsync_cnt >= x) & (vsync_cnt <= y + 1)) begin
+                if (sec == 3) begin
+                  if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 5) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) 
+                    v <= 1;
+                end
+                else if (sec != 3)begin
+                  if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) 
+                    v <= 1;
+                end
+              end
+            end
+            else if ((sec >= 30) & (sec < 45)) begin  
+              if ((hsync_cnt <= x + 1) & (vsync_cnt >= y)) begin
+                if (sec == 33) begin
+                  if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 5) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) 
+                    v <= 1;
+                end
+                else if (sec != 33)begin
+                  if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) 
+                    v <= 1;
+                end
+              end
+            end
+            else if (sec == 45) begin  
+              if ((hsync_cnt <= x) & (vsync_cnt >= y + 1)) begin
+                if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 5) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) 
+                  v <= 1;
+              end              
+            end
+            else if ((sec > 15) & (sec < 30)) begin  
+              if ((hsync_cnt >= x) & (vsync_cnt >= y)) begin
+                if (sec == 27) begin
+                  if ((s1*(vsync_cnt - y) - s2*(hsync_cnt - x) <= 5) & (s1*(vsync_cnt - y) - s2*(hsync_cnt - x) >= 0)) 
+                    v <= 1;
+                end
+                else if (sec != 27)begin
+                  if ((s1*(vsync_cnt - y) - s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) - s2*(hsync_cnt - x) >= 0)) 
+                    v <= 1;
+                end
+              end              
+            end   
+            else if ((sec > 45) & (sec <= 59)) begin  
+              if ((hsync_cnt <= x) & (vsync_cnt <= y)) begin
+                if (sec == 57) begin
+                  if ((s1*(vsync_cnt - y) - s2*(hsync_cnt - x) <= 5) & (s1*(vsync_cnt - y) - s2*(hsync_cnt - x) >= 0)) 
+                    v <= 1;
+                end
+                else if (sec != 57)begin
+                  if ((s1*(vsync_cnt - y) - s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) - s2*(hsync_cnt - x) >= 0)) 
+                    v <= 1;
+                end
+              end             
+            end 
+          end
+          else if ((min != hou) & (min != sec) & (sec != hou)) begin 
+            if (sec == 0) begin
+              if ((hsync_cnt <= x + 1) & (vsync_cnt <= y)) begin
+                if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 5) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) 
+                  v <= 1;
+                else
+                  v <= 0;
+              end  
+              else
+                v <= 0;            
+            end
+            else if ((sec > 0) & (sec <= 15)) begin
+              if ((hsync_cnt >= x) & (vsync_cnt <= y + 1)) begin
+                if (sec == 3) begin
+                  if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 5) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) 
+                    v <= 1;
+                  else
+                    v <= 0;
+                end
+                else if (sec != 3)begin
+                  if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) 
+                    v <= 1;
+                  else
+                    v <= 0;
+                end
+              end
+              else
+                v <= 0;            
+            end
+            else if ((sec >= 30) & (sec < 45)) begin  
+              if ((hsync_cnt <= x + 1) & (vsync_cnt >= y)) begin
+                if (sec == 33) begin
+                  if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 5) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) 
+                    v <= 1;
+                  else
+                    v <= 0;
+                end
+                else if (sec != 33)begin
+                  if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) 
+                    v <= 1;
+                  else
+                    v <= 0;
+                end
+              end
+              else
+                v <= 0;            
+            end
+            else if (sec == 45) begin  
+              if ((hsync_cnt <= x) & (vsync_cnt <= y + 1)) begin
+                if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 5) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) 
+                  v <= 1;
+                else
+                  v <= 0;
+              end   
+              else
+                v <= 0;           
+            end
+            else if ((sec > 15) & (sec < 30)) begin  
+              if ((hsync_cnt >= x) & (vsync_cnt >= y)) begin
+                if (sec == 27) begin
+                  if ((s1*(vsync_cnt - y) - s2*(hsync_cnt - x) <= 5) & (s1*(vsync_cnt - y) - s2*(hsync_cnt - x) >= 0)) 
+                    v <= 1;
+                  else
+                    v <= 0;
+                end
+                else if (sec != 27)begin
+                  if ((s1*(vsync_cnt - y) - s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) - s2*(hsync_cnt - x) >= 0)) 
+                    v <= 1;
+                  else
+                    v <= 0;
+                end
+              end    
+              else
+                v <= 0;          
+            end   
+            else if ((sec > 45) & (sec <= 59)) begin  
+              if ((hsync_cnt <= x) & (vsync_cnt <= y)) begin
+                if (sec == 57) begin
+                  if ((s1*(vsync_cnt - y) - s2*(hsync_cnt - x) <= 5) & (s1*(vsync_cnt - y) - s2*(hsync_cnt - x) >= 0)) 
+                    v <= 1;
+                  else
+                    v <= 0;
+                end
+                else if (sec != 57)begin
+                  if ((s1*(vsync_cnt - y) - s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) - s2*(hsync_cnt - x) >= 0)) 
+                    v <= 1;
+                  else
+                    v <= 0;
+                end
+              end    
+              else
+                v <= 0;          
+            end   
+            if (min == 0) begin
+              if ((hsync_cnt <= x + 1) & (vsync_cnt <= y)) begin
+                if ((m1*(vsync_cnt - y) + m2*(hsync_cnt - x) <= 5) & (m1*(vsync_cnt - y) + m2*(hsync_cnt - x) >= 0)) 
+                  v <= 3;
+              end
+            end
+            else if ((min > 0) & (min <= 15)) begin
+              if ((hsync_cnt >= x) & (vsync_cnt <= y + 1)) begin
+                if (min == 3) begin
+                  if ((m1*(vsync_cnt - y) + m2*(hsync_cnt - x) <= 5) & (m1*(vsync_cnt - y) + m2*(hsync_cnt - x) >= 0)) 
+                    v <= 3;
+                end   
+                else if (min != 3)begin
+                  if ((m1*(vsync_cnt - y) + m2*(hsync_cnt - x) <= 20) & (m1*(vsync_cnt - y) + m2*(hsync_cnt - x) >= 0)) 
+                    v <= 3;
+                end
+              end
+            end
+            else if ((min >= 30) & (min <= 45)) begin  
+              if ((hsync_cnt <= x + 1) & (vsync_cnt >= y)) begin
+                if (min == 33) begin
+                  if ((m1*(vsync_cnt - y) + m2*(hsync_cnt - x) <= 5) & (m1*(vsync_cnt - y) + m2*(hsync_cnt - x) >= 0)) 
+                    v <= 3;
+                end   
+                else if (min != 33)begin
+                  if ((m1*(vsync_cnt - y) + m2*(hsync_cnt - x) <= 20) & (m1*(vsync_cnt - y) + m2*(hsync_cnt - x) >= 0)) 
+                    v <= 3;
+                end
+              end
+            end
+            else if (min == 45) begin  
+              if ((hsync_cnt <= x) & (vsync_cnt <= y + 1)) begin
+                if ((m1*(vsync_cnt - y) + m2*(hsync_cnt - x) <= 5) & (m1*(vsync_cnt - y) + m2*(hsync_cnt - x) >= 0)) 
+                  v <= 3;                 
+              end              
+            end
+            else if ((min > 15) & (min < 30)) begin  
+              if ((hsync_cnt >= x) & (vsync_cnt >= y)) begin
+                if (min == 27) begin
+                  if ((m1*(vsync_cnt - y) - m2*(hsync_cnt - x) <= 5) & (m1*(vsync_cnt - y) - m2*(hsync_cnt - x) >= 0)) 
+                    v <= 3;
+                end   
+                else if (min != 27)begin
+                  if ((m1*(vsync_cnt - y) - m2*(hsync_cnt - x) <= 20) & (m1*(vsync_cnt - y) - m2*(hsync_cnt - x) >= 0)) 
+                    v <= 3;
+                end
+              end              
+            end   
+            else if ((min > 45) & (min <= 59)) begin  
+              if ((hsync_cnt <= x) & (vsync_cnt <= y)) begin
+                if (min == 57) begin
+                  if ((m1*(vsync_cnt - y) - m2*(hsync_cnt - x) <= 5) & (m1*(vsync_cnt - y) - m2*(hsync_cnt - x) >= 0)) 
+                    v <= 3;
+                end   
+                else if (min != 57)begin
+                  if ((m1*(vsync_cnt - y) - m2*(hsync_cnt - x) <= 20) & (m1*(vsync_cnt - y) - m2*(hsync_cnt - x) >= 0)) 
+                    v <= 3;
+                end
+              end              
+            end   
+            if (hou == 0) begin
+              if ((hsync_cnt <= x + 1) & (vsync_cnt <= y)) begin
+                if ((h1*(vsync_cnt - y) + h2*(hsync_cnt - x) <= 5) & (h1*(vsync_cnt - y) + h2*(hsync_cnt - x) >= 0))  begin 
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                    v <= 7;
+                end
+              end
+            end
+            else if ((hou > 0) & (hou <= 15)) begin
+              if ((hsync_cnt >= x) & (vsync_cnt <= y + 1)) begin
+                if (hou == 3) begin
+                  if ((h1*(vsync_cnt - y) + h2*(hsync_cnt - x) <= 5) & (h1*(vsync_cnt - y) + h2*(hsync_cnt - x) >= 0))  begin 
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;
+                  end
+                end
+                else if (hou != 3) begin
+                  if ((h1*(vsync_cnt - y) + h2*(hsync_cnt - x) <= 20) & (h1*(vsync_cnt - y) + h2*(hsync_cnt - x) >= 0))  begin 
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;
+                  end
+                end
+              end
+            end
+            else if ((hou >= 30) & (hou < 45)) begin  
+              if ((hsync_cnt <= x + 1) & (vsync_cnt >= y)) begin
+                if (hou == 33) begin
+                  if ((h1*(vsync_cnt - y) + h2*(hsync_cnt - x) <= 5) & (h1*(vsync_cnt - y) + h2*(hsync_cnt - x) >= 0))  begin 
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;
+                  end
+                end
+                else if (hou != 33)begin
+                  if ((h1*(vsync_cnt - y) + h2*(hsync_cnt - x) <= 20) & (h1*(vsync_cnt - y) + h2*(hsync_cnt - x) >= 0))  begin 
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;
+                  end
+                end
+              end
+            end
+            else if (hou == 45) begin  
+              if ((hsync_cnt <= x) & (vsync_cnt <= y + 1)) begin
+                if ((h1*(vsync_cnt - y) + h2*(hsync_cnt - x) <= 5) & (h1*(vsync_cnt - y) + h2*(hsync_cnt - x) >= 0))  begin
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                    v <= 7;                
+                end
+              end              
+            end
+            else if ((hou > 15) & (hou < 30)) begin  
+              if ((hsync_cnt >= x) & (vsync_cnt >= y)) begin
+                if (hou == 27) begin
+                  if ((h1*(vsync_cnt - y) - h2*(hsync_cnt - x) <= 5) & (h1*(vsync_cnt - y) - h2*(hsync_cnt - x) >= 0))  begin 
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;             
+                  end
+                end
+                else if (hou != 27)begin
+                  if ((h1*(vsync_cnt - y) - h2*(hsync_cnt - x) <= 20) & (h1*(vsync_cnt - y) - h2*(hsync_cnt - x) >= 0))  begin 
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;  
+                  end
+                end  
+              end            
+            end   
+            else if ((hou > 45) & (hou <= 59)) begin  
+              if ((hsync_cnt <= x) & (vsync_cnt <= y)) begin
+                if (hou == 57) begin
+                  if ((h1*(vsync_cnt - y) - h2*(hsync_cnt - x) <= 5) & (h1*(vsync_cnt - y) - h2*(hsync_cnt - x) >= 0))  begin 
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;             
+                  end
+                end
+                else if (hou != 57)begin
+                  if ((h1*(vsync_cnt - y) - h2*(hsync_cnt - x) <= 20) & (h1*(vsync_cnt - y) - h2*(hsync_cnt - x) >= 0))  begin 
+                    if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                      v <= 7;  
+                  end
+                end  
+              end            
+            end            
+          end               
+
+ 
+        else
+          v <= 0;
+        if (((hsync_cnt >= 242) & (hsync_cnt <= 257)) & ((vsync_cnt >= 159) & (vsync_cnt <= 190))) begin
+          if ((vsync_cnt >= 163) & ((hsync_cnt == 246) | (hsync_cnt == 247) | (hsync_cnt == 251) | (hsync_cnt == 252) | (hsync_cnt == 253)))
+            v <= 0;
+          else
+            v <= 7;
+        end
+        if (((hsync_cnt >= 224) & (hsync_cnt <= 239)) & ((vsync_cnt >= 159) & (vsync_cnt <= 190))) begin
+          if ((hr >= 0) & (hou < 12)) begin
+            if ( ((hsync_cnt >= 228) & (hsync_cnt <= 235)) & ( ((vsync_cnt >= 163) & (vsync_cnt <= 170)) | (vsync_cnt >= 175) ) )
+              v <= 0;
+            else
+              v <= 7;   
+          end
+          else begin
+            if ( ((hsync_cnt >= 228) & (vsync_cnt >= 175)) | (((hsync_cnt >= 228) & (hsync_cnt <= 235)) & ((vsync_cnt >= 163) & (vsync_cnt <= 170)) ) )
+              v <= 0;
+            else
+              v <= 7;
+          end
+        end
+    end
+end
+*/
+
+always @(posedge tft_iclk or negedge rst) begin
+    if(!rst) v <= 0;
+    else begin
+        if((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= r*r & (vsync_cnt - y)**2 + (hsync_cnt - x)**2 >= (r-3)**2) // drawing body of clock
+            v <= 7;
+        else if ((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-3)**2 & (vsync_cnt - y)**2 + (hsync_cnt - x)**2 >= (r-20)**2) begin // drawing scale of the clock (hour)
+          if (((hsync_cnt >= x) & (hsync_cnt <= x + 7)) | ((vsync_cnt <= y) & (vsync_cnt > y - 7)))
+            v <= 7;
+          else if ((10*(vsync_cnt - y) + 17*(hsync_cnt - x) <= 70) & (10*(vsync_cnt - y) + 17*(hsync_cnt - x) >= 0))
+            v <= 7;
+          else if ((10*(vsync_cnt - y) - 17*(hsync_cnt - x) <= 70) & (10*(vsync_cnt - y) - 17*(hsync_cnt - x) >= 0))
+            v <= 7;
+          else if ((100*(vsync_cnt - y) + 57*(hsync_cnt - x) <= 200) & (100*(vsync_cnt - y) + 57*(hsync_cnt - x) >= 0))
+            v <= 7;
+          else if ((100*(vsync_cnt - y) - 57*(hsync_cnt - x) <= 200) & (100*(vsync_cnt - y) - 57*(hsync_cnt - x) >= 0))
+            v <= 7;
+          else if ((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-3)**2 & (vsync_cnt - y)**2 + (hsync_cnt - x)**2 >= (r-9)**2) begin // drawing scale of the clock (minute)
+            if ((2*(vsync_cnt - y) + 19*(hsync_cnt - x) <= 10) & (2*(vsync_cnt - y) + 19*(hsync_cnt - x) >= 0))
+              v <= 7;
+            else if ((2*(vsync_cnt - y) - 19*(hsync_cnt - x) <= 30) & (2*(vsync_cnt - y) - 19*(hsync_cnt - x) >= 0))
+              v <= 7;
+            else if ((10*(vsync_cnt - y) + 47*(hsync_cnt - x) <= 100) & (10*(vsync_cnt - y) + 47*(hsync_cnt - x) >= 0))
+              v <= 7;
+            else if ((10*(vsync_cnt - y) - 47*(hsync_cnt - x) <= 100) & (10*(vsync_cnt - y) - 47*(hsync_cnt - x) >= 0))
+              v <= 7;
+            else if ((1*(vsync_cnt - y) + 3*(hsync_cnt - x) <= 10) & (1*(vsync_cnt - y) + 3*(hsync_cnt - x) >= 0))
+              v <= 7;
+            else if ((1*(vsync_cnt - y) - 3*(hsync_cnt - x) <= 10) & (1*(vsync_cnt - y) - 3*(hsync_cnt - x) >= 0))
+              v <= 7;
+            else if ((5*(vsync_cnt - y) + 11*(hsync_cnt - x) <= 30) & (5*(vsync_cnt - y) + 11*(hsync_cnt - x) >= 0))
+              v <= 7;
+            else if ((5*(vsync_cnt - y) - 11*(hsync_cnt - x) <= 30) & (5*(vsync_cnt - y) - 11*(hsync_cnt - x) >= 0))
+              v <= 7; 
+            else if ((10*(vsync_cnt - y) + 13*(hsync_cnt - x) <= 30) & (10*(vsync_cnt - y) + 13*(hsync_cnt - x) >= 0))
+              v <= 7;
+            else if ((10*(vsync_cnt - y) - 13*(hsync_cnt - x) <= 30) & (10*(vsync_cnt - y) - 13*(hsync_cnt - x) >= 0))
+              v <= 7;  
+            else if ((10*(vsync_cnt - y) + 11*(hsync_cnt - x) <= 30) & (10*(vsync_cnt - y) + 11*(hsync_cnt - x) >= 0))
+              v <= 7;
+            else if ((10*(vsync_cnt - y) - 11*(hsync_cnt - x) <= 30) & (10*(vsync_cnt - y) - 11*(hsync_cnt - x) >= 0))
+              v <= 7;
+            else if ((10*(vsync_cnt - y) + 9*(hsync_cnt - x) <= 30) & (10*(vsync_cnt - y) + 9*(hsync_cnt - x) >= 0))
+              v <= 7;
+            else if ((10*(vsync_cnt - y) - 9*(hsync_cnt - x) <= 30) & (10*(vsync_cnt - y) - 9*(hsync_cnt - x) >= 0))
+              v <= 7;
+            else if ((25*(vsync_cnt - y) + 18*(hsync_cnt - x) <= 30) & (25*(vsync_cnt - y) + 18*(hsync_cnt - x) >= 0))
+              v <= 7;
+            else if ((25*(vsync_cnt - y) - 18*(hsync_cnt - x) <= 30) & (25*(vsync_cnt - y) - 18*(hsync_cnt - x) >= 0))
+              v <= 7;
+            else if ((25*(vsync_cnt - y) + 11*(hsync_cnt - x) <= 30) & (25*(vsync_cnt - y) + 11*(hsync_cnt - x) >= 0))
+              v <= 7;
+            else if ((25*(vsync_cnt - y) - 11*(hsync_cnt - x) <= 30) & (25*(vsync_cnt - y) - 11*(hsync_cnt - x) >= 0))
+              v <= 7;
+            else if ((25*(vsync_cnt - y) + 8*(hsync_cnt - x) <= 30) & (25*(vsync_cnt - y) + 8*(hsync_cnt - x) >= 0))
+              v <= 7;  
+            else if ((25*(vsync_cnt - y) - 8*(hsync_cnt - x) <= 30) & (25*(vsync_cnt - y) - 8*(hsync_cnt - x) >= 0))  
+              v <= 7;
+            else if ((100*(vsync_cnt - y) + 21*(hsync_cnt - x) <= 70) & (100*(vsync_cnt - y) + 21*(hsync_cnt - x) >= 0))
+              v <= 7;  
+            else if ((100*(vsync_cnt - y) - 21*(hsync_cnt - x) <= 70) & (100*(vsync_cnt - y) - 21*(hsync_cnt - x) >= 0))  
+              v <= 7;
+            else if ((10*(vsync_cnt - y) + 1*(hsync_cnt - x) <= 20) & (10*(vsync_cnt - y) + 1*(hsync_cnt - x) >= 0))
+              v <= 7;  
+            else if ((10*(vsync_cnt - y) - 1*(hsync_cnt - x) <= 20) & (10*(vsync_cnt - y) - 1*(hsync_cnt - x) >= 0))  
+              v <= 7;
+            else
+              v <= 0;             
+          end
+          else
+            v <= 0;
+        end
+        else if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-50)**2)) begin
+          if ((sec == min) & (min == hou) & (sec == hou)) begin                                 // sec = min = hou
+            if (sec == 0) begin                                 //  sec = 0
+              if ((hsync_cnt <= x + 1) & (vsync_cnt <= y)) begin
+                if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) begin  // hand of the clock
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))  //length of the hand of the clock (hour)
+                    v <= 7;  // color of hand of the clock (hour)
+                  else
+                    v <= 3;  // color of hand of the clock (minute)
+                end
+                else
+                  v <= 0;
+              end
+              else
+                v <= 0;
+            end
+            else if ((sec > 0) & (sec <= 15)) begin
+              if ((hsync_cnt >= x) & (vsync_cnt <= y + 1)) begin
+                if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) begin
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                    v <= 7;
+                  else
+                    v <= 3;  
+                end
+                else
+                  v <= 0;
+              end
+              else
+                v <= 0;
+            end
+            else if ((sec >= 30) & (sec < 45)) begin
+              if ((hsync_cnt <= x + 1) & (vsync_cnt >= y)) begin
+                if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) begin
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                    v <= 7;
+                  else
+                    v <= 3;  
+                end
+                else
+                  v <= 0;
+              end
+              else
+                v <= 0;
+            end   
+            else if (sec == 45) begin                                 //  sec = 0
+              if ((hsync_cnt <= x) & (vsync_cnt <= y + 1)) begin
+                if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) begin  // hand of the clock
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))  //length of the hand of the clock (hour)
+                    v <= 7;  // color of hand of the clock (hour)
+                  else
+                    v <= 1;  // color of hand of the clock (minute)
+                end
+                else
+                  v <= 0;
+              end
+              else
+                v <= 0;  
+            end       
+            else if ((sec > 15) & (sec < 30)) begin
+              if ((hsync_cnt >= x) & (vsync_cnt >= y)) begin
+                if ((s1*(vsync_cnt - y) - s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) - s2*(hsync_cnt - x) >= 0)) begin
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                    v <= 7;
+                  else
+                    v <= 3;  
+                end
+                else
+                  v <= 0;
+              end
+              else
+                v <= 0;
+            end
+            else if ((sec > 45) & (sec <= 59)) begin
+              if ((hsync_cnt <= x) & (vsync_cnt <= y)) begin
+                if ((s1*(vsync_cnt - y) - s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) - s2*(hsync_cnt - x) >= 0)) begin
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                    v <= 7;
+                  else
+                    v <= 3;  
+                end
+                else
+                  v <= 0;
+              end
+              else
+                v <= 0;
+            end            
+          end
+          
+          else if ((sec == hou) & (min != sec)) begin                                 // sec = hou & sec != min
+            if (sec == 0) begin                                 //  sec = 0
+              if ((hsync_cnt <= x + 1) & (vsync_cnt <= y)) begin
+                if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) begin  // hand of the clock
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))  //length of the hand of the clock (hour)
+                    v <= 7;  // color of hand of the clock (hour)
+                  else
+                    v <= 1;  // color of hand of the clock (minute)
+                end
+                else
+                  v <= 0;
+              end
+              else
+                v <= 0;  
+            end
+            if ((sec > 0) & (sec <= 15)) begin
+              if ((hsync_cnt >= x) & (vsync_cnt <= y + 1)) begin
+                if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) begin
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                    v <= 7;
+                  else
+                    v <= 1;  
+                end
+                else
+                  v <= 0;
+              end
+              else
+                v <= 0;
+            end
+            else if ((sec >= 30) & (sec < 45)) begin
+              if ((hsync_cnt <= x + 1) & (vsync_cnt >= y)) begin
+                if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) begin
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                    v <= 7;
+                  else
+                    v <= 1;  
+                end
+                else
+                  v <= 0;                
+              end
+              else
+                v <= 0;
+            end
+            else if (sec == 45) begin                                 //  sec = 0
+              if ((hsync_cnt <= x) & (vsync_cnt <= y + 1)) begin
+                if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) begin  // hand of the clock
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))  //length of the hand of the clock (hour)
+                    v <= 7;  // color of hand of the clock (hour)
+                  else
+                    v <= 1;  // color of hand of the clock (minute)
+                end
+                else
+                  v <= 0;
+              end
+              else
+                v <= 0;  
+            end            
+            else if ((sec > 15) & (sec < 30)) begin
+              if ((hsync_cnt >= x) & (vsync_cnt >= y)) begin
+                if ((s1*(vsync_cnt - y) - s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) - s2*(hsync_cnt - x) >= 0)) begin
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                    v <= 7;
+                  else
+                    v <= 1;  
+                end
+                else
+                  v <= 0;                
+              end
+              else
+                v <= 0;
+            end
+            else if ((sec > 45) & (sec <= 59)) begin
+              if ((hsync_cnt <= x) & (vsync_cnt <= y)) begin
+                if ((s1*(vsync_cnt - y) - s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) - s2*(hsync_cnt - x) >= 0)) begin
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                    v <= 7;
+                  else
+                    v <= 1;  
+                end 
+                else
+                  v <= 0;                
+              end
+              else
+                v <= 0;
+            end
+            if (min == 0) begin
+              if ((hsync_cnt <= x + 1) & (vsync_cnt <= y + 1)) begin
+                if ((m1*(vsync_cnt - y) + m2*(hsync_cnt - x) <= 20) & (m1*(vsync_cnt - y) + m2*(hsync_cnt - x) >= 0))
+                  v <= 3;
+              end
+            end
+            else if ((min > 0) & (min <= 15)) begin
+              if ((hsync_cnt >= x) & (vsync_cnt <= y + 1)) begin
+                if ((m1*(vsync_cnt - y) + m2*(hsync_cnt - x) <= 20) & (m1*(vsync_cnt - y) + m2*(hsync_cnt - x) >= 0))
+                  v <= 3;
+              end
+            end
+            else if ((min >= 30) & (min < 45)) begin  
+              if ((hsync_cnt <= x + 1) & (vsync_cnt >= y)) begin
+                if ((m1*(vsync_cnt - y) + m2*(hsync_cnt - x) <= 20) & (m1*(vsync_cnt - y) + m2*(hsync_cnt - x) >= 0))
+                  v <= 3;
+              end              
+            end
+            else if (min == 45) begin
+              if ((hsync_cnt <= x) & (vsync_cnt <= y + 1)) begin
+                if ((m1*(vsync_cnt - y) + m2*(hsync_cnt - x) <= 20) & (m1*(vsync_cnt - y) + m2*(hsync_cnt - x) >= 0))
+                   v <= 3;
+              end
+            end
+            else if ((min > 15) & (min < 30)) begin  
+              if ((hsync_cnt >= x) & (vsync_cnt >= y)) begin
+                if ((m1*(vsync_cnt - y) - m2*(hsync_cnt - x) <= 20) & (m1*(vsync_cnt - y) - m2*(hsync_cnt - x) >= 0)) 
+                  v <= 3;
+              end              
+            end   
+            else if ((min > 45) & (min <= 59)) begin  
+              if ((hsync_cnt <= x) & (vsync_cnt <= y)) begin
+                if ((m1*(vsync_cnt - y) - m2*(hsync_cnt - x) <= 20) & (m1*(vsync_cnt - y) - m2*(hsync_cnt - x) >= 0))  
+                  v <= 3;
+              end              
+            end                                                     
+          end
+          
+          else if ((sec == min) & (min != hou)) begin                                      //sec = min & min != hou
+            if (sec == 0) begin
+              if ((hsync_cnt <= x + 1) & (vsync_cnt <= y)) begin
+                if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0))
+                  v <= 3; 
+                else
+                  v <= 0; 
+              end
+              else
+                v <= 0;
+            end
+            else if ((sec > 0) & (sec <= 15)) begin
+              if ((hsync_cnt >= x) & (vsync_cnt <= y + 1)) begin
+                if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0))
+                  v <= 3; 
+                else
+                  v <= 0; 
+              end
+              else
+                v <= 0;
+            end
+            else if ((sec >= 30) & (sec < 45)) begin
+              if ((hsync_cnt <= x + 1) & (vsync_cnt >= y)) begin
+                if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) 
+                  v <= 3;  
+                else
+                  v <= 0; 
+              end
+              else
+                v <= 0;
+            end  
+            else if (sec == 45) begin
+              if ((hsync_cnt <= x) & (vsync_cnt <= y + 1)) begin
+                if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) 
+                  v <= 3;  
+                else
+                  v <= 0; 
+              end
+              else
+                v <= 0;
+            end                   
+            else if ((sec > 15) & (sec < 30)) begin
+              if ((hsync_cnt >= x) & (vsync_cnt >= y)) begin
+                if ((s1*(vsync_cnt - y) - s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) - s2*(hsync_cnt - x) >= 0))
+                  v <= 3; 
+                else
+                  v <= 0; 
+              end
+              else
+                v <= 0;                  
+            end
+            else if ((sec > 45) & (sec <= 59)) begin
+              if ((hsync_cnt <= x) & (vsync_cnt <= y)) begin
+                if ((s1*(vsync_cnt - y) - s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) - s2*(hsync_cnt - x) >= 0))
+                  v <= 3; 
+                else
+                  v <= 0; 
+              end
+              else
+                v <= 0;
+            end 
+            if (hou == 0) begin
+              if ((hsync_cnt <= x + 1) & (vsync_cnt <= y)) begin
+                if ((h1*(vsync_cnt - y) + h2*(hsync_cnt - x) <= 20) & (h1*(vsync_cnt - y) + h2*(hsync_cnt - x) >= 0)) begin 
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                    v <= 7;
+                end
+              end
+            end
+            else if ((hou > 0) & (hou <= 15)) begin
+              if ((hsync_cnt >= x) & (vsync_cnt <= y + 1)) begin
+                if ((h1*(vsync_cnt - y) + h2*(hsync_cnt - x) <= 20) & (h1*(vsync_cnt - y) + h2*(hsync_cnt - x) >= 0)) begin 
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                    v <= 7;
+                end
+              end
+            end
+            else if ((hou >= 30) & (hou < 45)) begin  
+              if ((hsync_cnt <= x + 1) & (vsync_cnt >= y)) begin
+                if ((h1*(vsync_cnt - y) + h2*(hsync_cnt - x) <= 20) & (h1*(vsync_cnt - y) + h2*(hsync_cnt - x) >= 0)) begin
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                    v <= 7;                
+                end
+              end              
+            end
+            else if (hou == 45) begin  
+              if ((hsync_cnt <= x) & (vsync_cnt <= y + 1)) begin
+                if ((h1*(vsync_cnt - y) + h2*(hsync_cnt - x) <= 20) & (h1*(vsync_cnt - y) + h2*(hsync_cnt - x) >= 0)) begin
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                    v <= 7;                
+                end
+              end              
+            end
+            else if ((hou > 15) & (hou < 30)) begin  
+              if ((hsync_cnt >= x) & (vsync_cnt >= y)) begin
+                if ((h1*(vsync_cnt - y) - h2*(hsync_cnt - x) <= 20) & (h1*(vsync_cnt - y) - h2*(hsync_cnt - x) >= 0)) begin 
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                    v <= 7;             
+                end  
+              end            
+            end   
+            else if ((hou > 45) & (hou <= 59)) begin  
+              if ((hsync_cnt <= x) & (vsync_cnt <= y)) begin
+                if ((h1*(vsync_cnt - y) - h2*(hsync_cnt - x) <= 20) & (h1*(vsync_cnt - y) - h2*(hsync_cnt - x) >= 0)) begin
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                    v <= 7;                  
+                end
+              end              
+            end                     
+          end
+          
+          else if ((min == hou) & (min != sec)) begin                                      //min = hou & min != sec
+            if (min == 0) begin
+              if ((hsync_cnt <= x + 1) & (vsync_cnt <= y)) begin
+                if ((m1*(vsync_cnt - y) + m2*(hsync_cnt - x) <= 20) & (m1*(vsync_cnt - y) + m2*(hsync_cnt - x) >= 0)) begin
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                    v <= 7;
+                  else
+                    v <= 3;
+                end
+                else
+                  v <= 0;
+              end
+              else
+                v <= 0;
+            end  
+            else if ((min > 0) & (min <= 15)) begin
+              if ((hsync_cnt >= x) & (vsync_cnt <= y + 1)) begin
+                if ((m1*(vsync_cnt - y) + m2*(hsync_cnt - x) <= 20) & (m1*(vsync_cnt - y) + m2*(hsync_cnt - x) >= 0)) begin
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                    v <= 7;
+                  else
+                    v <= 3;
+                end
+                else
+                  v <= 0;
+              end
+              else
+                v <= 0;
+            end
+            else if ((min >= 30) & (min < 45)) begin
+              if ((hsync_cnt <= x + 1) & (vsync_cnt >= y)) begin
+                if ((m1*(vsync_cnt - y) + m2*(hsync_cnt - x) <= 20) & (m1*(vsync_cnt - y) + m2*(hsync_cnt - x) >= 0)) begin
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                    v <= 7;
+                  else
+                    v <= 3;                
+                end
+                else
+                  v <= 0;
+              end
+              else
+                v <= 0;
+            end   
+            else if (min == 45) begin
+              if ((hsync_cnt <= x) & (vsync_cnt <= y + 1)) begin
+                if ((m1*(vsync_cnt - y) + m2*(hsync_cnt - x) <= 20) & (m1*(vsync_cnt - y) + m2*(hsync_cnt - x) >= 0)) begin
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                    v <= 7;
+                  else
+                    v <= 3;
+                end
+                else
+                    v <= 0;
+              end
+              else
+                v <= 0;
+            end                    
+            else if ((min > 15) & (min < 30)) begin
+              if ((hsync_cnt >= x) & (vsync_cnt >= y)) begin
+                if ((m1*(vsync_cnt - y) - m2*(hsync_cnt - x) <= 20) & (m1*(vsync_cnt - y) - m2*(hsync_cnt - x) >= 0)) begin
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                    v <= 7;
+                  else
+                    v <= 3;                  
+                end
+                else 
+                  v <= 0;
+              end
+              else
+                v <= 0;
+            end
+            else if ((min > 45) & (min <= 59)) begin
+              if ((hsync_cnt <= x) & (vsync_cnt <= y)) begin
+                if ((m1*(vsync_cnt - y) - m2*(hsync_cnt - x) <= 20) & (m1*(vsync_cnt - y) - m2*(hsync_cnt - x) >= 0)) begin
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                    v <= 7;
+                  else
+                    v <= 3;                 
+                end  
+                else
+                  v <= 0;
+              end
+              else
+                v <= 0;
+            end
+            if (sec == 0) begin
+              if ((hsync_cnt <= x + 1) & (vsync_cnt <= y)) begin
+                if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) 
+                  v <= 1;
+              end
+            end
+            else if ((sec > 0) & (sec <= 15)) begin
+              if ((hsync_cnt >= x) & (vsync_cnt <= y + 1)) begin
+                if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) 
+                  v <= 1;
+              end
+            end
+            else if ((sec >= 30) & (sec < 45)) begin  
+              if ((hsync_cnt <= x + 1) & (vsync_cnt >= y)) begin
+                if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) 
+                  v <=1;
+              end              
+            end
+            else if (sec == 45) begin  
+              if ((hsync_cnt <= x) & (vsync_cnt <= y + 1)) begin
+                if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) 
+                  v <= 1;
+              end              
+            end
+            else if ((sec > 15) & (sec < 30)) begin  
+              if ((hsync_cnt >= x) & (vsync_cnt >= y)) begin
+                if ((s1*(vsync_cnt - y) - s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) - s2*(hsync_cnt - x) >= 0)) 
+                  v <= 1;
+              end              
+            end   
+            else if ((sec > 45) & (sec <= 59)) begin  
+              if ((hsync_cnt <= x) & (vsync_cnt <= y)) begin
+                if ((s1*(vsync_cnt - y) - s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) - s2*(hsync_cnt - x) >= 0))  
+                  v <= 1;
+              end              
+            end                    
+          end
+          else if ((min != hou) & (min != sec) & (sec != hou)) begin 
+            if (sec == 0) begin
+              if ((hsync_cnt <= x + 1) & (vsync_cnt <= y)) begin
+                if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) 
+                  v <= 1;
+                else
+                  v <= 0;
+              end  
+              else
+                v <= 0;            
+            end
+            else if ((sec > 0) & (sec <= 15)) begin
+              if ((hsync_cnt >= x) & (vsync_cnt <= y + 1)) begin
+                if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) 
+                  v <= 1;
+                else
+                  v <= 0;
+              end  
+              else
+                v <= 0;            
+            end
+            else if ((sec >= 30) & (sec < 45)) begin  
+              if ((hsync_cnt <= x + 1) & (vsync_cnt >= y)) begin
+                if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) 
+                  v <= 1;
+                else
+                  v <= 0;
+              end   
+              else
+                v <= 0;           
+            end
+            else if (sec == 45) begin  
+              if ((hsync_cnt <= x) & (vsync_cnt <= y + 1)) begin
+                if ((s1*(vsync_cnt - y) + s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) + s2*(hsync_cnt - x) >= 0)) 
+                  v <= 1;
+                else
+                  v <= 0;
+              end   
+              else
+                v <= 0;           
+            end
+            else if ((sec > 15) & (sec < 30)) begin  
+              if ((hsync_cnt >= x) & (vsync_cnt >= y)) begin
+                if ((s1*(vsync_cnt - y) - s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) - s2*(hsync_cnt - x) >= 0)) 
+                  v <= 1;
+                else
+                  v <= 0;
+              end    
+              else
+                v <= 0;          
+            end   
+            else if ((sec > 45) & (sec <= 59)) begin  
+              if ((hsync_cnt <= x) & (vsync_cnt <= y)) begin
+                if ((s1*(vsync_cnt - y) - s2*(hsync_cnt - x) <= 20) & (s1*(vsync_cnt - y) - s2*(hsync_cnt - x) >= 0)) 
+                  v <= 1;
+                else 
+                  v <= 0;
+              end      
+              else 
+                v <= 0;        
+            end
+            if (min == 0) begin
+              if ((hsync_cnt <= x + 1) & (vsync_cnt <= y)) begin
+                if ((m1*(vsync_cnt - y) + m2*(hsync_cnt - x) <= 20) & (m1*(vsync_cnt - y) + m2*(hsync_cnt - x) >= 0)) 
+                  v <= 3;
+              end
+            end
+            else if ((min > 0) & (min <= 15)) begin
+              if ((hsync_cnt >= x) & (vsync_cnt <= y + 1)) begin
+                if ((m1*(vsync_cnt - y) + m2*(hsync_cnt - x) <= 20) & (m1*(vsync_cnt - y) + m2*(hsync_cnt - x) >= 0)) 
+                  v <= 3;
+              end
+            end
+            else if ((min >= 30) & (min < 45)) begin  
+              if ((hsync_cnt <= x + 1) & (vsync_cnt >= y)) begin
+                if ((m1*(vsync_cnt - y) + m2*(hsync_cnt - x) <= 20) & (m1*(vsync_cnt - y) + m2*(hsync_cnt - x) >= 0)) 
+                  v <= 3;                 
+              end              
+            end
+            else if (min == 45) begin  
+              if ((hsync_cnt <= x) & (vsync_cnt <= y + 1)) begin
+                if ((m1*(vsync_cnt - y) + m2*(hsync_cnt - x) <= 20) & (m1*(vsync_cnt - y) + m2*(hsync_cnt - x) >= 0)) 
+                  v <= 3;                 
+              end              
+            end
+            else if ((min > 15) & (min < 30)) begin  
+              if ((hsync_cnt >= x) & (vsync_cnt >= y)) begin
+                if ((m1*(vsync_cnt - y) - m2*(hsync_cnt - x) <= 20) & (m1*(vsync_cnt - y) - m2*(hsync_cnt - x) >= 0)) 
+                  v <= 3;
+              end              
+            end   
+            else if ((min > 45) & (min <= 59)) begin  
+              if ((hsync_cnt <= x) & (vsync_cnt <= y)) begin
+                if ((m1*(vsync_cnt - y) - m2*(hsync_cnt - x) <= 20) & (m1*(vsync_cnt - y) - m2*(hsync_cnt - x) >= 0)) 
+                  v <= 3;
+              end              
+            end
+            if (hou == 0) begin
+              if ((hsync_cnt <= x + 1) & (vsync_cnt <= y)) begin
+                if ((h1*(vsync_cnt - y) + h2*(hsync_cnt - x) <= 20) & (h1*(vsync_cnt - y) + h2*(hsync_cnt - x) >= 0))  begin 
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                    v <= 7;
+                end
+              end
+            end
+            if ((hou > 0) & (hou <= 15)) begin
+              if ((hsync_cnt >= x) & (vsync_cnt <= y + 1)) begin
+                if ((h1*(vsync_cnt - y) + h2*(hsync_cnt - x) <= 20) & (h1*(vsync_cnt - y) + h2*(hsync_cnt - x) >= 0))  begin 
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                    v <= 7;
+                end
+              end
+            end
+            else if ((hou >= 30) & (hou < 45)) begin  
+              if ((hsync_cnt <= x + 1) & (vsync_cnt >= y)) begin
+                if ((h1*(vsync_cnt - y) + h2*(hsync_cnt - x) <= 20) & (h1*(vsync_cnt - y) + h2*(hsync_cnt - x) >= 0))  begin
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                    v <= 7;                
+                end
+              end              
+            end
+            else if (hou == 45) begin  
+              if ((hsync_cnt <= x) & (vsync_cnt <= y + 1)) begin
+                if ((h1*(vsync_cnt - y) + h2*(hsync_cnt - x) <= 20) & (h1*(vsync_cnt - y) + h2*(hsync_cnt - x) >= 0))  begin
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                    v <= 7;                
+                end
+              end              
+            end
+            else if ((hou > 15) & (hou < 30)) begin  
+              if ((hsync_cnt >= x) & (vsync_cnt >= y)) begin
+                if ((h1*(vsync_cnt - y) - h2*(hsync_cnt - x) <= 20) & (h1*(vsync_cnt - y) - h2*(hsync_cnt - x) >= 0))  begin 
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                    v <= 7;             
+                end  
+              end            
+            end   
+            else if ((hou > 45) & (hou <= 59)) begin  
+              if ((hsync_cnt <= x) & (vsync_cnt <= y)) begin
+                if ((h1*(vsync_cnt - y) - h2*(hsync_cnt - x) <= 20) & (h1*(vsync_cnt - y) - h2*(hsync_cnt - x) >= 0))  begin
+                  if (((vsync_cnt - y)**2 + (hsync_cnt - x)**2 <= (r-100)**2))
+                    v <= 7;                   
+                end
+              end              
+            end              
+          end              
+        end
+        else  
+          v <= 0;
+        if (((hsync_cnt >= 242) & (hsync_cnt <= 257)) & ((vsync_cnt >= 159) & (vsync_cnt <= 190))) begin
+          if ((vsync_cnt >= 163) & ((hsync_cnt == 246) | (hsync_cnt == 247) | (hsync_cnt == 251) | (hsync_cnt == 252) | (hsync_cnt == 253)))
+            v <= 0;
+          else
+            v <= 7;
+        end
+        if (((hsync_cnt >= 224) & (hsync_cnt <= 239)) & ((vsync_cnt >= 159) & (vsync_cnt <= 190))) begin
+          if ((hr >= 0) & (hr < 12)) begin
+            if ( ((hsync_cnt >= 228) & (hsync_cnt <= 235)) & ( ((vsync_cnt >= 163) & (vsync_cnt <= 170)) | (vsync_cnt >= 175) ) )
+              v <= 0;
+            else
+              v <= 7;   
+          end
+          else begin
+            if ( ((hsync_cnt >= 228) & (vsync_cnt >= 175)) | (((hsync_cnt >= 228) & (hsync_cnt <= 235)) & ((vsync_cnt >= 163) & (vsync_cnt <= 170)) ) )
+              v <= 0;
+            else
+              v <= 7;
+          end
+        end
+    end
+end
+
+     
+
+assign HSYNC = hsync_1;
+assign VSYNC = vsync_1;
+
+assign R_data = (lcd_data_en) ? ( v[0] ? 4'b1111 : 4'b0000) : 4'b0000;
+assign G_data = (lcd_data_en) ? ( v[1] ? 4'b1111 : 4'b0000) : 4'b0000;
+assign B_data = (lcd_data_en) ? ( v[2] ? 4'b1111 : 4'b0000) : 4'b0000;
+
+endmodule
